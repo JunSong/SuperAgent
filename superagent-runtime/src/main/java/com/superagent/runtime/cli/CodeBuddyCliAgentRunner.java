@@ -120,18 +120,14 @@ public class CodeBuddyCliAgentRunner extends JsonLineCliRunner {
                 continue;
             }
             String r = rule.strip();
-            if (r.startsWith("mcp__")) {
-                continue;
-            }
-            // server__tool without mcp__ prefix is still an MCP allowlist entry, not a built-in.
-            if (r.contains("__")) {
-                continue;
-            }
+            // Strip scoped args first so paths like Read(./src/__tests__/**) are not mistaken for MCP.
             int paren = r.indexOf('(');
             String name = (paren >= 0 ? r.substring(0, paren) : r).strip();
-            if (!name.isBlank()) {
-                names.add(name);
+            if (name.isBlank() || name.startsWith("mcp__") || name.contains("__")) {
+                // MCP rules (mcp__server / server__tool) stay off --tools; built-in names only.
+                continue;
             }
+            names.add(name);
         }
         return String.join(",", names);
     }

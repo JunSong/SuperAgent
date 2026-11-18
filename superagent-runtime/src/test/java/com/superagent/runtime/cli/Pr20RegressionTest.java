@@ -71,6 +71,21 @@ class Pr20RegressionTest {
     }
 
     @Test
+    void codebuddyPathWithDoubleUnderscoreIsStillBuiltIn() throws Exception {
+        assertThat(CodeBuddyCliAgentRunner.builtInToolNames(
+                List.of("Read(./src/__tests__/**)", "Bash(git:*)", "mcp__superagent__file_read")))
+                .isEqualTo("Read,Bash");
+
+        AgentRunRequest scoped = new AgentRunRequest("s", null, dir.toString(), "hi", "m",
+                List.of("Read(./src/__tests__/**)"), false, null, null)
+                .withCredential(new RunCredential("c", null, "fake", false));
+        List<String> cmd = new CodeBuddyCliAgentRunner("codebuddy", 5).buildCommand(scoped, null, new ArrayList<>());
+        assertThat(cmd).containsSequence("--allowedTools", "Read(./src/__tests__/**)")
+                .containsSequence("--tools", "Read")
+                .doesNotContain("-y");
+    }
+
+    @Test
     void geminiSettingsMustBeWrittenUnderHomeDotGemini() throws Exception {
         var r = new GeminiCliAgentRunner("gemini", 5);
         r.buildCommand(req(), null, new ArrayList<>());
