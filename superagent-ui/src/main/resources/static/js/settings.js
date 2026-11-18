@@ -21,6 +21,7 @@ const sel = {
   publicUrl: document.getElementById("sfPublicUrl"),
   complexMaxSubtasks: document.getElementById("sfComplexMaxSubtasks"),
   complexMaxParallel: document.getElementById("sfComplexMaxParallel"),
+  codebuddyInternet: document.getElementById("sfCodebuddyInternet"),
   missing: document.getElementById("sfAgentModelMissing"),
   filtered: document.getElementById("sfAgentModelFiltered"),
   status: document.getElementById("sfStatus"),
@@ -41,6 +42,7 @@ async function loadSettingsForm() {
   sel.publicUrl.value = systemSettings.publicUrl || "";
   sel.complexMaxSubtasks.value = systemSettings.complexMaxSubtasks || 10;
   sel.complexMaxParallel.value = systemSettings.complexMaxParallel || 5;
+  sel.codebuddyInternet.value = systemSettings.codebuddyInternetEnvironment || "internal";
 
   sel.agentModel.innerHTML = "";
   const def = document.createElement("option");
@@ -125,6 +127,7 @@ sel.form.addEventListener("submit", async e => {
       backupModels,
       complexMaxSubtasks: Number(sel.complexMaxSubtasks.value) || null,
       complexMaxParallel: Number(sel.complexMaxParallel.value) || null,
+      codebuddyInternetEnvironment: sel.codebuddyInternet.value || "internal",
     });
     if (!res || !res.data) throw new Error((res && res.message) || "no data");
     systemSettings = res.data;

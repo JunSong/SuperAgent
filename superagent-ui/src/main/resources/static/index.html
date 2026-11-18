@@ -833,6 +833,17 @@
               <input type="number" id="sfComplexMaxParallel" min="1" max="20" step="1" /></label>
           </div>
           <p class="field-hint" data-i18n="settings.complexHint">A complex task splits its work into subtasks that run side by side, then sums up. These cap how many it may hand out and how many run at the same time.</p>
+          <h3 class="settings-form__section" data-i18n="settings.sectionCodeBuddy">CodeBuddy</h3>
+          <label class="field"><span data-i18n="settings.codebuddyInternet">Internet environment</span>
+            <select id="sfCodebuddyInternet">
+              <option value="internal" data-i18n="settings.codebuddyInternet.internal">China (internal)</option>
+              <option value="public" data-i18n="settings.codebuddyInternet.public">International (public)</option>
+              <option value="ioa" data-i18n="settings.codebuddyInternet.ioa">iOA</option>
+              <option value="cloudhosted" data-i18n="settings.codebuddyInternet.cloudhosted">Dedicated (cloudhosted)</option>
+              <option value="selfhosted" data-i18n="settings.codebuddyInternet.selfhosted">Self-hosted</option>
+            </select>
+          </label>
+          <p class="field-hint" data-i18n="settings.codebuddyInternetHint">Sets CODEBUDDY_INTERNET_ENVIRONMENT for every CodeBuddy run. Default is China (internal).</p>
           <div class="settings-form__actions">
             <button type="submit" class="btn btn--primary" data-i18n="common.save">Save</button>
             <span class="settings-form__status" id="sfStatus" role="status"></span>

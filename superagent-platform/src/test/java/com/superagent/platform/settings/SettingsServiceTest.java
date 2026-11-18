@@ -95,4 +95,15 @@ class SettingsServiceTest {
         assertThat(off.taskFixedModelsOn()).isFalse();
         assertThat(off.taskFixedModels()).containsExactly("gpt-5.5", "claude-opus-5-5");
     }
+
+    @Test
+    void codeBuddyInternetEnvironmentDefaultsToInternalAndRejectsUnknown() {
+        assertThat(service.get().codebuddyInternetEnvironment()).isEqualTo("internal");
+        assertThat(service.update(new SystemSettingsDto(null, null, null, null, null, null, null, null, null, " PUBLIC "))
+                .codebuddyInternetEnvironment()).isEqualTo("public");
+        assertThat(service.update(new SystemSettingsDto(null, "OKG", null)).codebuddyInternetEnvironment())
+                .isEqualTo("public"); // null on save keeps it
+        assertThatThrownBy(() -> service.update(new SystemSettingsDto(null, null, null, null, null, null, null, null, null, "mars")))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
 }

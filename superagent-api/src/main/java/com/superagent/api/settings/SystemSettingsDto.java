@@ -10,6 +10,8 @@ package com.superagent.api.settings;
  * @param publicUrl         how people reach this server from outside (e.g. https://ai.company.com), for addresses
  *                          handed to other systems such as OAuth callbacks; null = follow the browser's address.
  *                          On a save, null keeps it and blank clears it
+ * @param codebuddyInternetEnvironment CodeBuddy region: {@code internal} (default, China), {@code public}
+ *                          (international), {@code ioa}, {@code cloudhosted}, {@code selfhosted}. Null on a save keeps it
  */
 public record SystemSettingsDto(String agentDefaultModel, String companyName, String companyShortName, String publicUrl,
                                 /**
@@ -20,7 +22,15 @@ public record SystemSettingsDto(String agentDefaultModel, String companyName, St
                                 /** A complex task: the most subtasks it may hand out (null on a save keeps it). */
                                 Integer complexMaxSubtasks,
                                 /** A complex task: how many of its subtasks run at once (null on a save keeps it). */
-                                Integer complexMaxParallel) {
+                                Integer complexMaxParallel,
+                                /**
+                                 * Tasks run only on {@link #taskFixedModels}, cheapest first, instead of a model
+                                 * picked per task (null on a save keeps it).
+                                 */
+                                Boolean taskFixedModelsOn,
+                                /** The models tasks are held to while that's on (null on a save keeps them). */
+                                java.util.List<String> taskFixedModels,
+                                String codebuddyInternetEnvironment) {
 
     public SystemSettingsDto(String agentDefaultModel, String companyName, String companyShortName) {
         this(agentDefaultModel, companyName, companyShortName, null, null);
@@ -32,6 +42,19 @@ public record SystemSettingsDto(String agentDefaultModel, String companyName, St
 
     public SystemSettingsDto(String agentDefaultModel, String companyName, String companyShortName, String publicUrl,
                              java.util.List<String> backupModels) {
-        this(agentDefaultModel, companyName, companyShortName, publicUrl, backupModels, null, null);
+        this(agentDefaultModel, companyName, companyShortName, publicUrl, backupModels, null, null, null, null, null);
+    }
+
+    public SystemSettingsDto(String agentDefaultModel, String companyName, String companyShortName, String publicUrl,
+                             java.util.List<String> backupModels, Integer complexMaxSubtasks, Integer complexMaxParallel) {
+        this(agentDefaultModel, companyName, companyShortName, publicUrl, backupModels, complexMaxSubtasks,
+                complexMaxParallel, null, null, null);
+    }
+
+    public SystemSettingsDto(String agentDefaultModel, String companyName, String companyShortName, String publicUrl,
+                             java.util.List<String> backupModels, Integer complexMaxSubtasks, Integer complexMaxParallel,
+                             Boolean taskFixedModelsOn, java.util.List<String> taskFixedModels) {
+        this(agentDefaultModel, companyName, companyShortName, publicUrl, backupModels, complexMaxSubtasks,
+                complexMaxParallel, taskFixedModelsOn, taskFixedModels, null);
     }
 }
