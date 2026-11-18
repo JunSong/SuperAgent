@@ -50,6 +50,27 @@ class Pr20RegressionTest {
     }
 
     @Test
+    void codebuddyScopedRulesKeepFullAllowedToolsButBareNamesForToolsFlag() throws Exception {
+        assertThat(CodeBuddyCliAgentRunner.builtInToolNames(
+                List.of("Bash(git:*)", "Read(/src/**)", "Edit", "mcp__superagent__file_read", "Bash(git:*)")))
+                .isEqualTo("Bash,Read,Edit");
+
+        AgentRunRequest scoped = new AgentRunRequest("s", null, dir.toString(), "hi", "m",
+                List.of("Bash(git:*)", "Read(/src/**)", "mcp__corp"), false, null, null)
+                .withCredential(new RunCredential("c", null, "fake", false));
+        List<String> cmd = new CodeBuddyCliAgentRunner("codebuddy", 5).buildCommand(scoped, null, new ArrayList<>());
+        assertThat(cmd).containsSequence("--allowedTools", "Bash(git:*) Read(/src/**) mcp__corp")
+                .containsSequence("--tools", "Bash,Read")
+                .doesNotContain("-y");
+    }
+
+    @Test
+    void codebuddyMcpOnlyAllowlistDisablesBuiltIns() {
+        assertThat(CodeBuddyCliAgentRunner.builtInToolNames(List.of("mcp__superagent", "mcp__corp__list")))
+                .isEmpty();
+    }
+
+    @Test
     void geminiSettingsMustBeWrittenUnderHomeDotGemini() throws Exception {
         var r = new GeminiCliAgentRunner("gemini", 5);
         r.buildCommand(req(), null, new ArrayList<>());

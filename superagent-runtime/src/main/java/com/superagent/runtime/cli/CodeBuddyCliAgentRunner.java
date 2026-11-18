@@ -68,10 +68,12 @@ public class CodeBuddyCliAgentRunner extends JsonLineCliRunner {
         if (request.skipPermissions()) {
             cmd.add("-y");
         } else if (request.allowedTools() != null && !request.allowedTools().isEmpty()) {
+            // --allowedTools takes full permission rules (incl. Bash(git:*)); --tools takes bare
+            // built-in names only. MCP rules stay on --allowedTools / --mcp-config, not --tools.
             cmd.add("--allowedTools");
             cmd.add(String.join(" ", request.allowedTools()));
             cmd.add("--tools");
-            cmd.add(String.join(",", request.allowedTools()));
+            cmd.add(builtInToolNames(request.allowedTools()));
             cmd.add("--setting-sources");
             cmd.add("");
         } else {
@@ -101,6 +103,37 @@ public class CodeBuddyCliAgentRunner extends JsonLineCliRunner {
             return null;
         }
         return request.mcpConfig();
+    }
+
+    /**
+     * Built-in names for CodeBuddy {@code --tools}: strip scoped permission args
+     * ({@code Bash(git:*)} → {@code Bash}), drop MCP rules ({@code mcp__…}), preserve order, dedupe.
+     * Empty when the allowlist has no built-ins (MCP-only) — still disables every built-in tool.
+     */
+    static String builtInToolNames(List<String> allowedTools) {
+        if (allowedTools == null || allowedTools.isEmpty()) {
+            return "";
+        }
+        java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>();
+        for (String rule : allowedTools) {
+            if (rule == null || rule.isBlank()) {
+                continue;
+            }
+            String r = rule.strip();
+            if (r.startsWith("mcp__")) {
+                continue;
+            }
+            // server__tool without mcp__ prefix is still an MCP allowlist entry, not a built-in.
+            if (r.contains("__")) {
+                continue;
+            }
+            int paren = r.indexOf('(');
+            String name = (paren >= 0 ? r.substring(0, paren) : r).strip();
+            if (!name.isBlank()) {
+                names.add(name);
+            }
+        }
+        return String.join(",", names);
     }
 
     @Override
