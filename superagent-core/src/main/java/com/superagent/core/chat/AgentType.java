@@ -18,7 +18,7 @@ public enum AgentType {
     GROK("grok"),
     /** Tencent CodeBuddy Code: Claude-shaped stream-json + {@code --mcp-config}. */
     CODEBUDDY("codebuddy"),
-    /** Google Gemini CLI: stream-json; MCP via an isolated {@code GEMINI_CONFIG_DIR} settings file. */
+    /** Google Gemini CLI: stream-json; MCP via {@code <GEMINI_CLI_HOME>/.gemini/settings.json}. */
     GEMINI("gemini"),
     /** MiniMax Code: {@code mcode exec --output-format stream-json}; MCP via isolated {@code MINIMAX_DATA_DIR}. */
     MINIMAX("minimax");

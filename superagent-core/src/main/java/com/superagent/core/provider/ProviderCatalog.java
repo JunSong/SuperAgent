@@ -86,7 +86,7 @@ public final class ProviderCatalog {
             // the built-in catalogue; inference is CLI --version (key check) plus a short -p turn (per model).
             npmEntry("codebuddy", "CodeBuddy Code（腾讯）", "codebuddy", true, "@tencent-ai/codebuddy-code", "18.0.0", false,
                     List.of(), new Access(OTHER, null, "CODEBUDDY_API_KEY", "CODEBUDDY_BASE_URL")),
-            // Gemini: MCP lives in settings.json under an isolated GEMINI_CONFIG_DIR (no --mcp-config flag).
+            // Gemini: MCP lives in <GEMINI_CLI_HOME>/.gemini/settings.json (no --mcp-config flag).
             npmEntry("gemini", "Gemini CLI", "gemini", true, "@google/gemini-cli", "20.0.0", false,
                     List.of(), new Access(OTHER, null, "GEMINI_API_KEY", "GOOGLE_GEMINI_BASE_URL")),
             // MiniMax Code: headless mcode exec; key via MCODE_PROVIDER_API_KEY into an isolated MINIMAX_DATA_DIR.

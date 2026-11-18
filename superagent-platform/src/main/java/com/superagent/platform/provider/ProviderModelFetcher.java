@@ -106,7 +106,7 @@ public class ProviderModelFetcher {
     }
 
     /**
-     * Gemini CLI: {@code gemini --list-models -o json} under an isolated HOME / GEMINI_CONFIG_DIR so listing
+     * Gemini CLI: {@code gemini --list-models -o json} under an isolated {@code GEMINI_CLI_HOME} so listing
      * never writes into the operator's real {@code ~/.gemini}.
      */
     private Result fetchGemini(com.superagent.core.chat.RunCredential credential)
@@ -123,7 +123,7 @@ public class ProviderModelFetcher {
                     .redirectError(ProcessBuilder.Redirect.DISCARD);
             pb.environment().put("PATH", String.join(File.pathSeparator, probe.searchPath()));
             pb.environment().put("HOME", home.toString());
-            pb.environment().put("GEMINI_CONFIG_DIR", home.resolve(".gemini").toString());
+            pb.environment().put("GEMINI_CLI_HOME", home.toString());
             pb.environment().put("GEMINI_API_KEY", credential.apiKey());
             if (credential.baseUrl() != null && !credential.baseUrl().isBlank()) {
                 pb.environment().put("GOOGLE_GEMINI_BASE_URL", credential.baseUrl().strip());
