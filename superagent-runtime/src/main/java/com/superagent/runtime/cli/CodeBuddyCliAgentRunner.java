@@ -62,15 +62,24 @@ public class CodeBuddyCliAgentRunner extends JsonLineCliRunner {
             cmd.addAll(List.of("--append-system-prompt", request.systemPromptWithMemory()));
         }
         // Headless print mode needs an explicit permission policy or the CLI blocks / waits on tools.
-        // -y is bypassPermissions — only when the launcher opts in. Empty allowlist disables tools
-        // via --tools "" (not -y); a non-empty allowlist uses --allowedTools.
+        // -y / bypassPermissions only when skipPermissions=true. An empty allowlist (FileTagger,
+        // AgentMemoryService, …) must deny tools — never fall through to -y. --tools "" disables
+        // built-ins; --setting-sources "" avoids user/project settings re-enabling bypass.
         if (request.skipPermissions()) {
             cmd.add("-y");
         } else if (request.allowedTools() != null && !request.allowedTools().isEmpty()) {
             cmd.add("--allowedTools");
             cmd.add(String.join(" ", request.allowedTools()));
+            cmd.add("--tools");
+            cmd.add(String.join(",", request.allowedTools()));
+            cmd.add("--setting-sources");
+            cmd.add("");
         } else {
             cmd.add("--tools");
+            cmd.add("");
+            cmd.add("--permission-mode");
+            cmd.add("dontAsk");
+            cmd.add("--setting-sources");
             cmd.add("");
         }
         String mcp = mcpConfig(request);

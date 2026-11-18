@@ -30,7 +30,9 @@ class Pr20RegressionTest {
         try {
             List<String> cmd = new CodeBuddyCliAgentRunner("codebuddy", 5).buildCommand(req(), null, clean);
             assertThat(cmd).doesNotContain("-y", "--dangerously-skip-permissions");
-            assertThat(cmd).containsSequence("--tools", "");
+            assertThat(cmd).containsSequence("--tools", "")
+                    .containsSequence("--permission-mode", "dontAsk")
+                    .containsSequence("--setting-sources", "");
         } finally {
             for (var p : clean) {
                 Files.deleteIfExists(p);
@@ -44,7 +46,7 @@ class Pr20RegressionTest {
                 .withCredential(new RunCredential("c", null, "fake", false));
         List<String> cmd = new CodeBuddyCliAgentRunner("codebuddy", 5).buildCommand(skip, null, new ArrayList<>());
         assertThat(cmd).contains("-y");
-        assertThat(cmd).doesNotContain("--tools");
+        assertThat(cmd).doesNotContain("--tools", "--setting-sources");
     }
 
     @Test

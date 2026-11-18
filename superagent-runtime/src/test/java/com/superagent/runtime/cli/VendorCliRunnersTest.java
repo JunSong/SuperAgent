@@ -79,7 +79,9 @@ class VendorCliRunnersTest {
         List<String> cmd = new CodeBuddyCliAgentRunner("codebuddy", 60).buildCommand(req, null, cleanup);
         assertThat(cmd).contains("-p", "--output-format", "stream-json", "--include-partial-messages",
                 "--model", "auto", "--strict-mcp-config", "--mcp-config");
-        assertThat(cmd).containsSequence("--tools", "");
+        assertThat(cmd).containsSequence("--tools", "")
+                .containsSequence("--permission-mode", "dontAsk")
+                .containsSequence("--setting-sources", "");
         assertThat(cmd).doesNotContain("-y", "--dangerously-skip-permissions", "--resume");
         String mcpFile = cmd.get(cmd.indexOf("--mcp-config") + 1);
         assertThat(java.nio.file.Files.readString(java.nio.file.Path.of(mcpFile)))
@@ -105,7 +107,9 @@ class VendorCliRunnersTest {
                 new RunCredential("c1", null, "sk-test", false));
         List<String> cmd = new CodeBuddyCliAgentRunner("codebuddy", 60).buildCommand(req, "cli-sess", List.of());
         assertThat(cmd).containsSequence("--resume", "cli-sess");
-        assertThat(cmd).containsSequence("--allowedTools", "Read Edit");
+        assertThat(cmd).containsSequence("--allowedTools", "Read Edit")
+                .containsSequence("--tools", "Read,Edit")
+                .containsSequence("--setting-sources", "");
         assertThat(cmd).doesNotContain("-y", "--append-system-prompt", "--mcp-config");
     }
 
