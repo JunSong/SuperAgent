@@ -61,14 +61,17 @@ public class CodeBuddyCliAgentRunner extends JsonLineCliRunner {
         } else if (request.systemPromptWithMemory() != null && !request.systemPromptWithMemory().isBlank()) {
             cmd.addAll(List.of("--append-system-prompt", request.systemPromptWithMemory()));
         }
-        // Headless print mode needs an explicit permission policy or the CLI blocks tool use.
+        // Headless print mode needs an explicit permission policy or the CLI blocks / waits on tools.
+        // -y is bypassPermissions — only when the launcher opts in. Empty allowlist disables tools
+        // via --tools "" (not -y); a non-empty allowlist uses --allowedTools.
         if (request.skipPermissions()) {
             cmd.add("-y");
         } else if (request.allowedTools() != null && !request.allowedTools().isEmpty()) {
             cmd.add("--allowedTools");
             cmd.add(String.join(" ", request.allowedTools()));
         } else {
-            cmd.add("-y");
+            cmd.add("--tools");
+            cmd.add("");
         }
         String mcp = mcpConfig(request);
         if (mcp != null) {

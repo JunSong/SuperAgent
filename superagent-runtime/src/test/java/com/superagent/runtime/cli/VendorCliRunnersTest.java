@@ -78,8 +78,9 @@ class VendorCliRunnersTest {
         List<java.nio.file.Path> cleanup = new java.util.ArrayList<>();
         List<String> cmd = new CodeBuddyCliAgentRunner("codebuddy", 60).buildCommand(req, null, cleanup);
         assertThat(cmd).contains("-p", "--output-format", "stream-json", "--include-partial-messages",
-                "--model", "auto", "-y", "--strict-mcp-config", "--mcp-config");
-        assertThat(cmd).doesNotContain("--resume");
+                "--model", "auto", "--strict-mcp-config", "--mcp-config");
+        assertThat(cmd).containsSequence("--tools", "");
+        assertThat(cmd).doesNotContain("-y", "--dangerously-skip-permissions", "--resume");
         String mcpFile = cmd.get(cmd.indexOf("--mcp-config") + 1);
         assertThat(java.nio.file.Files.readString(java.nio.file.Path.of(mcpFile)))
                 .contains("\"type\":\"http\"").contains("Bearer turn-token");
@@ -114,11 +115,11 @@ class VendorCliRunnersTest {
         List<JsonLineCliRunner.Line> lines = new ArrayList<>();
         for (String l : List.of(
                 "{\"type\":\"init\",\"session_id\":\"g-sess-1\",\"model\":\"gemini-2.5-pro\"}",
-                "{\"type\":\"message\",\"role\":\"assistant\",\"content\":\"Hel\"}",
-                "{\"type\":\"message\",\"role\":\"assistant\",\"content\":\"Hello\"}",
+                "{\"type\":\"message\",\"role\":\"assistant\",\"delta\":true,\"content\":\"Hel\"}",
+                "{\"type\":\"message\",\"role\":\"assistant\",\"delta\":true,\"content\":\"lo\"}",
                 "{\"type\":\"tool_use\",\"tool_name\":\"read_file\",\"tool_id\":\"t1\"}",
                 "{\"type\":\"tool_result\",\"tool_id\":\"t1\",\"output\":\"ok\"}",
-                "{\"type\":\"result\",\"status\":\"success\",\"stats\":{\"inputTokens\":10,\"outputTokens\":2}}")) {
+                "{\"type\":\"result\",\"status\":\"success\",\"stats\":{\"input_tokens\":10,\"output_tokens\":2,\"cached\":0}}")) {
             lines.addAll(parser.parse(l));
         }
         assertThat(lines).extracting(JsonLineCliRunner.Line::type).containsExactly(
@@ -127,6 +128,7 @@ class VendorCliRunnersTest {
         assertThat(lines.get(0).payload()).isEqualTo("g-sess-1");
         assertThat(lines.get(1).payload()).isEqualTo("Hel");
         assertThat(lines.get(2).payload()).isEqualTo("lo");
+        assertThat(lines.get(5).payload()).isEqualTo("Hello");
         assertThat(parser.tokens("gemini-2.5-pro")).singleElement()
                 .satisfies(u -> {
                     assertThat(u.input()).isEqualTo(10);
@@ -142,14 +144,15 @@ class VendorCliRunnersTest {
                 new RunCredential("c1", null, "sk", false)))).isEqualTo("auto_edit");
         assertThat(GeminiCliAgentRunner.environment(req.credential(), java.nio.file.Path.of("/tmp/g")))
                 .containsEntry("GEMINI_API_KEY", "sk-test")
-                .containsEntry("GEMINI_CONFIG_DIR", "/tmp/g")
-                .containsEntry("HOME", "/tmp/g");
+                .containsEntry("GEMINI_CLI_HOME", "/tmp/g")
+                .containsEntry("HOME", "/tmp/g")
+                .doesNotContainKey("GEMINI_CONFIG_DIR");
 
         List<String> cmd = new GeminiCliAgentRunner("gemini", 60).buildCommand(req, null, List.of());
         assertThat(cmd).contains("-p", "--output-format", "stream-json", "--skip-trust",
                 "--approval-mode", "plan", "--model", "gemini-2.5-pro");
         assertThat(java.nio.file.Files.readString(
-                java.nio.file.Path.of("/tmp/.superagent/gemini-home/s1/settings.json")))
+                java.nio.file.Path.of("/tmp/.superagent/gemini-home/s1/.gemini/settings.json")))
                 .contains("httpUrl");
     }
 
