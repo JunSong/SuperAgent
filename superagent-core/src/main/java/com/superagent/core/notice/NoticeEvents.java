@@ -12,14 +12,24 @@ public final class NoticeEvents {
     /**
      * A task changed status. {@code agentId} is set when an agent created it (only at creation);
      * {@code status} is the lower-case task status; {@code result} is the agent's final reply when it finished.
+     * {@code repeated}: it waits again on the same question the owner was already told about (no news to tell).
      */
     public record TaskStatusChanged(String taskId, String owner, String title, String source, String status,
-                                    String error, String agentId, String result) {
+                                    String error, String agentId, String result, boolean repeated) {
+
+        public TaskStatusChanged(String taskId, String owner, String title, String source, String status,
+                                 String error, String agentId, String result) {
+            this(taskId, owner, title, source, status, error, agentId, result, false);
+        }
 
         public TaskStatusChanged(String taskId, String owner, String title, String source, String status,
                                  String error, String agentId) {
-            this(taskId, owner, title, source, status, error, agentId, null);
+            this(taskId, owner, title, source, status, error, agentId, null, false);
         }
+    }
+
+    /** A running task's milestone worth telling the chat that set it off (not a status change). */
+    public record TaskNote(String taskId, String owner, String title, String text) {
     }
 
     /** The user's SuperAgent proposed a plan ({@code open}) or the plan was approved / replaced. */

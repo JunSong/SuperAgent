@@ -134,6 +134,8 @@ public class ClaudeCliAgentRunner implements AgentRunner {
         applyCredential(pb, request.credential());
         // No update check, telemetry or error reporting on each run: measured 4.7s → 3.2s to the CLI's first event.
         pb.environment().put("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1");
+        // Some platform tools take minutes (transcribing an hour of audio).
+        pb.environment().put("MCP_TOOL_TIMEOUT", String.valueOf(com.superagent.runtime.mcp.McpGrants.TOOL_TIMEOUT_SECONDS * 1000L));
     }
 
     static void applyCredential(ProcessBuilder pb, com.superagent.core.chat.RunCredential credential) {
@@ -205,7 +207,7 @@ public class ClaudeCliAgentRunner implements AgentRunner {
 
         Process process;
         try {
-            process = pb.start();
+            process = CliProcesses.track(pb.start());
             if (stdinMessage != null) {
                 try (OutputStream stdin = process.getOutputStream()) {
                     stdin.write(stdinMessage.getBytes(StandardCharsets.UTF_8));
@@ -219,7 +221,7 @@ public class ClaudeCliAgentRunner implements AgentRunner {
         }
 
         // Let the orchestrator stop this turn by killing the subprocess.
-        cancellation.onCancel(process::destroyForcibly);
+        cancellation.onCancel(() -> CliProcesses.kill(process)); // with its children: a tool it started must not live on
 
         Thread stderr = new Thread(() -> drainStderr(process.getErrorStream(), request.sessionId(), stderrTail),
                 "claude-stderr-" + request.sessionId());

@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> **Never send anything out to a remote, and never run `scripts/package.sh`.** No `git push`, no `scp` / `rsync` / `ssh`
+> uploads, no deploying to or running commands on the deploy host. Pulling in is fine (`git pull`, `git fetch`,
+> `git clone`), as is local git (`status`, `diff`, `log`, `add`, `commit`). Shipping out is done by the user.
+
 ## What this is
 
 SuperAgent is an AI collaborative work system for companies, not a personal assistant: everyone works with AI in one system, and the work becomes company assets (see [README.md](README.md) for the positioning, in priority order). Design features from the company's and its employees' side, not one person's. The core is running and iterating fast; you will often be scaffolding new functionality as well as modifying existing behavior.
@@ -24,18 +28,25 @@ mvn -pl superagent-core test -Dtest=SomeClassTest#method # single test method
 Run the application (superagent-server is the one executable Spring Boot jar):
 
 ```bash
-mvn install -DskipTests && mvn -pl superagent-server spring-boot:run   # everything on :18080
-mvn clean package -PreleaseTgz                                         # release tarball (see README)
+scripts/run-local.sh                    # mvn package, copy the jar to run/, run it on :18080 (Ctrl-C stops gracefully)
+scripts/run-local.sh --server.port=18099 --superagent.agent.workspace-dir=/tmp/sa-18099/workspaces  # a second instance
+mvn clean package -PreleaseTgz          # release tarball (see README)
 ```
+
+The server runs from its own copy of the jar, so `mvn install` while it runs can't change classes under it (with
+`spring-boot:run` the classpath points into `~/.m2`, which `mvn install` overwrites). On shutdown the server waits up
+to `superagent.task.shutdown.timeout` (2 min) for running task turns and local merges, then marks what's left as
+interrupted by the restart and ends every CLI process; those tasks resume right after the next start.
 
 Smoke-check web wiring: `curl localhost:18080/api/v1/meta`.
 
-Under `spring-boot:run` the UI is served straight from `superagent-ui/src/main/resources/static` (configured in
-superagent-server's pom), so front-end edits show on a browser refresh. Java changes still need `mvn install` + restart.
+The UI is served straight from `superagent-ui/src/main/resources/static` (the script passes it; `spring-boot:run` gets it
+from superagent-server's pom), so front-end edits show on a browser refresh. Java changes need `scripts/run-local.sh`
+again (it rebuilds and restarts from a fresh copy).
 
 ## Module architecture
 
-Seventeen Maven modules, layered; a module may only depend on modules below it (Maven enforces this — a
+Eighteen Maven modules, layered; a module may only depend on modules below it (Maven enforces this — a
 module only sees what its pom declares):
 
 ```text
@@ -45,6 +56,7 @@ L5  superagent-ui            the browser UI: static HTML/CSS/JS served from clas
 L4  superagent-orchestrator  the user's SuperAgent: plans work, hires team members, assigns tasks
 L4  superagent-event         the inbox: the company Feishu app (routing to employees), triage + batch schedule, to-dos
 L3  superagent-docs         office documents for agents: Feishu / Lark docs and DingTalk docs, acting as each employee
+L3  superagent-media        audio / video for agents: speech to text (subtitles, transcripts) on the company's own keys
 L3  superagent-cost         cost optimisation: model tiers worked out from prices and what can run (a core ModelRouter)
 L3  superagent-agent         conversations: agents, chat turns, memory, characters, collaboration, run log
 L3  superagent-task          execution: tasks, session pool, watchdog, the coding flow, automations
@@ -77,7 +89,12 @@ keep packages under `com.superagent.*`.
 
 ## Deployment
 
-`scripts/package.sh` is the deploy path, not a local build helper. It computes the set of changed/untracked/deleted files versus `origin/<branch>`, tars **only those files**, `scp`s them to a remote host, then on the remote runs pull → extract → commit → push, and finally commits the same files locally. It also opens/updates a GitHub PR for non-`main` branches. Note it commits with the message `dev` on both ends — this explains the flat `dev` commit history. All values crossing the SSH boundary are base64-encoded to avoid shell injection. Treat running this script as an outward-facing, hard-to-reverse action.
+`scripts/diff_build.sh <commit-id> [-m <msg>] [-o <dir>]` packages what changed since that commit, for someone to
+apply by hand; nothing leaves the machine. It first commits every uncommitted change **locally** (never push, fetch or
+any other remote operation), then writes one file, `superagent-<from>-<to>.tar.gz`: a directory with `changes.tar.gz`
+(files added or changed between the two commits) and `apply.sh`, which is run from the target's root: it lists the
+changes, asks, extracts `changes.tar.gz` over the current directory and deletes the files deleted here. It prints
+`<to>`, the commit to pass next time; nothing is remembered between runs. Updating a host with it is done by the user.
 
 ## Conventions
 

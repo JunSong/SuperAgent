@@ -109,7 +109,7 @@ public class CodexCliAgentRunner implements AgentRunner {
                     pb.environment().put(server.tokenEnvVar(), server.token());
                 }
             }
-            process = pb.start();
+            process = CliProcesses.track(pb.start());
             try (OutputStream stdin = process.getOutputStream()) {
                 stdin.write(prompt(request, threadId == null).getBytes(StandardCharsets.UTF_8));
             }
@@ -117,7 +117,7 @@ public class CodexCliAgentRunner implements AgentRunner {
             emit(sink, request, 0, AgentEventType.ERROR, "Failed to start codex: " + e.getMessage());
             return;
         }
-        cancellation.onCancel(process::destroyForcibly);
+        cancellation.onCancel(() -> CliProcesses.kill(process)); // with its children: a tool it started must not live on
         StringBuilder stderr = new StringBuilder();
         Thread drain = new Thread(() -> drainStderr(process.getErrorStream(), stderr), "codex-stderr-" + request.sessionId());
         drain.setDaemon(true);
@@ -192,6 +192,9 @@ public class CodexCliAgentRunner implements AgentRunner {
             // SuperAgent's own run config and are already scoped per turn — the same trust as Claude's allowlist.
             cmd.add("-c");
             cmd.add("mcp_servers." + server.name() + ".default_tools_approval_mode=\"approve\"");
+            // Some platform tools take minutes (transcribing an hour of audio): Codex gives up after 60 s by default.
+            cmd.add("-c");
+            cmd.add("mcp_servers." + server.name() + ".tool_timeout_sec=" + com.superagent.runtime.mcp.McpGrants.TOOL_TIMEOUT_SECONDS);
             if (server.token() != null) {
                 cmd.add("-c");
                 cmd.add("mcp_servers." + server.name() + ".bearer_token_env_var=" + jsonString(server.tokenEnvVar()));
