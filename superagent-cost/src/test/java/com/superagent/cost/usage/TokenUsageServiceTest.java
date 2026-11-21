@@ -110,4 +110,32 @@ class TokenUsageServiceTest {
         assertThat(service.summary("ada", Instant.EPOCH, Instant.now(), ZoneOffset.UTC).tasks())
                 .singleElement().satisfies(t -> assertThat(t.key()).isEqualTo("main"));
     }
+
+    @Test
+    void stampsProjectOnRecordAndGroupsSpendByProject() {
+        when(prices.price("m")).thenReturn(Optional.of(new ModelPriceService.Price(1, 1, null, null, "x")));
+        com.superagent.core.project.ProjectAccess access = mock(com.superagent.core.project.ProjectAccess.class);
+        when(access.projectOfTask("t1")).thenReturn(Optional.of("p1"));
+        when(access.projectOfAgent("dev")).thenReturn(Optional.of("p2"));
+        service.setProjects(access);
+        com.superagent.core.project.ProjectStore projectStore = mock(com.superagent.core.project.ProjectStore.class);
+        when(projectStore.list()).thenReturn(List.of(
+                new com.superagent.core.project.Project("p1", "Alpha", null, "ada",
+                        com.superagent.core.project.ProjectStatus.ACTIVE, Instant.now(), Instant.now(), null),
+                new com.superagent.core.project.Project("p2", "Beta", null, "ada",
+                        com.superagent.core.project.ProjectStatus.ACTIVE, Instant.now(), Instant.now(), null)));
+        service.setProjectStore(projectStore);
+
+        service.record(new UsageContext("ada", UsageContext.SOURCE_TASK, "dev", "t1", null, "claude"),
+                "[{\"model\":\"m\",\"input\":1000000,\"cacheRead\":0,\"cacheWrite\":0,\"cacheWrite1h\":0,\"output\":0,\"reasoning\":0}]");
+        service.record(new UsageContext("ada", UsageContext.SOURCE_CHAT, "dev", null, "s1", "claude"),
+                "[{\"model\":\"m\",\"input\":2000000,\"cacheRead\":0,\"cacheWrite\":0,\"cacheWrite1h\":0,\"output\":0,\"reasoning\":0}]");
+        service.record(new UsageContext("ada", UsageContext.SOURCE_FILE_TAGS, null, null, null, "claude"),
+                "[{\"model\":\"m\",\"input\":500000,\"cacheRead\":0,\"cacheWrite\":0,\"cacheWrite1h\":0,\"output\":0,\"reasoning\":0}]");
+
+        assertThat(rows).extracting(UsageRecord::projectId).containsExactly("p1", "p2", null);
+        UsageDtos.Summary summary = service.summary("ada", Instant.EPOCH, Instant.now(), ZoneOffset.UTC);
+        assertThat(summary.byProject()).extracting(UsageDtos.Total::key).containsExactly("p2", "p1", "");
+        assertThat(summary.byProject()).extracting(UsageDtos.Total::label).containsExactly("Beta", "Alpha", "");
+    }
 }

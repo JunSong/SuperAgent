@@ -53,10 +53,39 @@ public class TokenUsageService implements UsageRecorder {
 
     private final com.superagent.core.task.TaskStore tasks;
     private com.superagent.core.task.TaskLinkStore links; // null in tests: no subtasks
+    private com.superagent.core.project.ProjectAccess projects; // null in tests / when projects aren't wired
+    private com.superagent.core.project.ProjectStore projectStore;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     void setLinks(com.superagent.core.task.TaskLinkStore links) {
         this.links = links;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setProjects(com.superagent.core.project.ProjectAccess projects) {
+        this.projects = projects;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setProjectStore(com.superagent.core.project.ProjectStore projectStore) {
+        this.projectStore = projectStore;
+    }
+
+    /** Project at record time: task's project first, else the agent's. */
+    private String projectOf(UsageContext context) {
+        if (projects == null || context == null) {
+            return null;
+        }
+        if (context.taskId() != null) {
+            var fromTask = projects.projectOfTask(context.taskId());
+            if (fromTask.isPresent()) {
+                return fromTask.get();
+            }
+        }
+        if (context.agentId() != null) {
+            return projects.projectOfAgent(context.agentId()).orElse(null);
+        }
+        return null;
     }
 
     /** The task a run counts toward: a subtask's runs count toward its complex task. */
@@ -90,6 +119,7 @@ public class TokenUsageService implements UsageRecorder {
             return null;
         }
         Instant now = Instant.now();
+        String projectId = projectOf(context);
         Double total = null;
         for (TokenUsage u : used) {
             if (u.nothingUsed()) {
@@ -97,8 +127,9 @@ public class TokenUsageService implements UsageRecorder {
             }
             Double usd = cost(u);
             store.save(new UsageRecord(UUID.randomUUID().toString(), now, context.user(), context.source(),
-                    context.agentId(), context.taskId(), context.sessionId(), context.cli(), u.model(), u.input(),
-                    u.cacheRead(), u.cacheWrite(), u.cacheWrite1h(), u.output(), u.reasoning(), usd, u.cliCostUsd()));
+                    context.agentId(), context.taskId(), projectId, context.sessionId(), context.cli(), u.model(),
+                    u.input(), u.cacheRead(), u.cacheWrite(), u.cacheWrite1h(), u.output(), u.reasoning(), usd,
+                    u.cliCostUsd()));
             if (usd != null) {
                 total = (total == null ? 0 : total) + usd;
             }
@@ -109,7 +140,8 @@ public class TokenUsageService implements UsageRecorder {
     @Override
     public void recordCost(UsageContext context, String model, double usd) {
         store.save(new UsageRecord(UUID.randomUUID().toString(), Instant.now(), context.user(), context.source(),
-                context.agentId(), context.taskId(), context.sessionId(), context.cli(), model, 0, 0, 0, 0, 0, 0, usd, null));
+                context.agentId(), context.taskId(), projectOf(context), context.sessionId(), context.cli(), model,
+                0, 0, 0, 0, 0, 0, usd, null));
     }
 
     /** USD by list price; null when the model has none. */
@@ -165,10 +197,22 @@ public class TokenUsageService implements UsageRecorder {
         List<UsageDtos.Total> byTask = group(forTasks, r -> root.apply(r.taskId()), id -> titles.get(id) == null ? "" : titles.get(id));
         List<UsageDtos.Total> byAgent = group(forAgents, r -> r.agentId() == null ? "" : r.agentId(),
                 a -> a.isEmpty() ? "" : agentNames.getOrDefault(a, ""));
+        Map<String, String> projectNames = projectNames();
+        List<UsageDtos.Total> byProject = group(people, r -> r.projectId() == null ? "" : r.projectId(),
+                id -> id.isEmpty() ? "" : projectNames.getOrDefault(id, id));
         return new UsageDtos.Summary(from, to, total(records), total(forTasks), total(forAgents), byDay,
                 latestFirst(byTask), byAgent, group(records, UsageRecord::model, m -> m),
                 user == null ? group(people, r -> r.user() == null ? "" : r.user(), u -> names.getOrDefault(u, u)) : List.of(),
+                byProject,
                 total(forSystem), group(forSystem, r -> r.source() + "|" + r.model(), k -> k));
+    }
+
+    private Map<String, String> projectNames() {
+        Map<String, String> names = new java.util.HashMap<>();
+        if (projectStore != null) {
+            projectStore.list().forEach(p -> names.put(p.id(), p.name()));
+        }
+        return names;
     }
 
     private static List<UsageDtos.Total> latestFirst(List<UsageDtos.Total> rows) {
