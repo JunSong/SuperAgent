@@ -14,6 +14,34 @@ import java.util.List;
 /** Token usage on MySQL, or on ClickHouse as analytics data: rows are only appended, so the same SQL serves both. */
 public class JdbcUsageStore implements UsageStore {
 
+    /** Pre-project_id schema: used in upgrade tests; production always uses {@link #MYSQL_DDL}. */
+    static final String MYSQL_DDL_BEFORE_PROJECT = """
+            CREATE TABLE IF NOT EXISTS token_usage (
+              company_id     VARCHAR(64)  NOT NULL,
+              id             VARCHAR(64)  NOT NULL,
+              at             DATETIME(3)  NOT NULL,
+              user_name      VARCHAR(128),
+              source         VARCHAR(32)  NOT NULL,
+              agent_id       VARCHAR(64),
+              task_id        VARCHAR(64),
+              session_id     VARCHAR(64),
+              cli            VARCHAR(32),
+              model          VARCHAR(128),
+              input_tokens   BIGINT NOT NULL,
+              cache_read     BIGINT NOT NULL,
+              cache_write    BIGINT NOT NULL,
+              cache_write_1h BIGINT NOT NULL,
+              output_tokens  BIGINT NOT NULL,
+              reasoning      BIGINT NOT NULL,
+              cost_usd       DOUBLE,
+              cli_cost_usd   DOUBLE,
+              PRIMARY KEY (company_id, id),
+              KEY idx_usage_task (company_id, task_id),
+              KEY idx_usage_user_at (company_id, user_name, at),
+              KEY idx_usage_at (company_id, at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """;
+
     static final String MYSQL_DDL = """
             CREATE TABLE IF NOT EXISTS token_usage (
               company_id     VARCHAR(64)  NOT NULL,
@@ -69,25 +97,84 @@ public class JdbcUsageStore implements UsageStore {
         ensureProjectId(ddl);
     }
 
+    /**
+     * Adds {@code project_id} (and its MySQL index) when upgrading an existing table.
+     * Only "already exists" outcomes are ignored; permission / syntax / other failures abort startup.
+     */
     private void ensureProjectId(String ddl) {
-        if (ddl == MYSQL_DDL) {
-            try {
-                jdbc.execute("ALTER TABLE token_usage ADD COLUMN project_id VARCHAR(64)");
-            } catch (RuntimeException ignored) {
-                // already present
+        if (ddl == MYSQL_DDL || ddl == MYSQL_DDL_BEFORE_PROJECT) {
+            // CREATE IF NOT EXISTS leaves old tables unchanged — migrate those explicitly.
+            ensureMysqlColumn("project_id", "VARCHAR(64)");
+            ensureMysqlIndex("idx_usage_project_at", "(company_id, project_id, at)");
+            return;
+        }
+        // ClickHouse: IF NOT EXISTS is idempotent; other errors (permissions, etc.) must surface.
+        jdbc.execute("ALTER TABLE token_usage ADD COLUMN IF NOT EXISTS project_id Nullable(String)");
+    }
+
+    private void ensureMysqlColumn(String column, String type) {
+        if (mysqlObjectPresent(
+                "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = SCHEMA() "
+                        + "AND LOWER(table_name) = 'token_usage' AND LOWER(column_name) = LOWER(?)",
+                column)) {
+            return;
+        }
+        try {
+            jdbc.execute("ALTER TABLE token_usage ADD COLUMN " + column + " " + type);
+        } catch (RuntimeException e) {
+            if (alreadyExists(e)) {
+                return;
             }
-            try {
-                jdbc.execute("ALTER TABLE token_usage ADD KEY idx_usage_project_at (company_id, project_id, at)");
-            } catch (RuntimeException ignored) {
-                // already present
+            throw e;
+        }
+    }
+
+    private void ensureMysqlIndex(String name, String columns) {
+        if (mysqlObjectPresent(
+                "SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema = SCHEMA() "
+                        + "AND LOWER(table_name) = 'token_usage' AND LOWER(index_name) = LOWER(?)",
+                name)) {
+            return;
+        }
+        try {
+            jdbc.execute("ALTER TABLE token_usage ADD KEY " + name + " " + columns);
+        } catch (RuntimeException e) {
+            if (alreadyExists(e)) {
+                return;
             }
-        } else {
-            try {
-                jdbc.execute("ALTER TABLE token_usage ADD COLUMN IF NOT EXISTS project_id Nullable(String)");
-            } catch (RuntimeException ignored) {
-                // already present
+            throw e;
+        }
+    }
+
+    /** {@code true} when the catalog says the object is there; {@code false} if absent or the catalog query is unavailable (e.g. H2). */
+    private boolean mysqlObjectPresent(String sql, String name) {
+        try {
+            Integer present = jdbc.queryForObject(sql, Integer.class, name);
+            return present != null && present > 0;
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    /** MySQL 1060/1061 and common "already exists" messages from H2 / drivers. */
+    static boolean alreadyExists(Throwable error) {
+        for (Throwable t = error; t != null; t = t.getCause()) {
+            if (t instanceof java.sql.SQLException sql) {
+                int code = sql.getErrorCode();
+                if (code == 1060 || code == 1061) { // Duplicate column name / Duplicate key name
+                    return true;
+                }
+            }
+            String msg = t.getMessage();
+            if (msg != null) {
+                String m = msg.toLowerCase(java.util.Locale.ROOT);
+                if (m.contains("duplicate column") || m.contains("duplicate key")
+                        || m.contains("already exists") || m.contains("index collides")) {
+                    return true;
+                }
             }
         }
+        return false;
     }
 
     @Override

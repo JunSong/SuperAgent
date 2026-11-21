@@ -10,6 +10,7 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @ExtendWith(InCompany.class)
 class UsageStoreTest {
@@ -36,5 +37,59 @@ class UsageStoreTest {
             assertThat(store.forTask("t1")).isEmpty();
             assertThat(store.between(null, t, t.plusSeconds(3600))).isEmpty();
         });
+    }
+
+    @Test
+    void upgradesExistingTableWithProjectIdAndIndex() {
+        JdbcTemplate jdbc = new JdbcTemplate(new DriverManagerDataSource(
+                "jdbc:h2:mem:usage-upgrade-" + System.nanoTime() + ";MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", ""));
+        TenantSchema.create(jdbc, JdbcUsageStore.MYSQL_DDL_BEFORE_PROJECT);
+        assertThat(columnPresent(jdbc, "project_id")).isZero();
+
+        // CREATE IF NOT EXISTS leaves the old table; ensure* must add the column (and index on MySQL).
+        JdbcUsageStore store = new JdbcUsageStore(jdbc, JdbcUsageStore.MYSQL_DDL);
+        assertThat(columnPresent(jdbc, "project_id")).isEqualTo(1);
+
+        Instant t = Instant.parse("2026-11-07T00:00:00Z");
+        store.save(new UsageRecord("u1", t, "ada", "task", null, "t1", "p9", null, "claude", "m", 1, 0, 0, 0, 0, 0, 0.01, null));
+        assertThat(store.forTask("t1")).singleElement().extracting(UsageRecord::projectId).isEqualTo("p9");
+
+        // Second boot must not fail when the column/index are already there.
+        new JdbcUsageStore(jdbc, JdbcUsageStore.MYSQL_DDL);
+    }
+
+    @Test
+    void failedProjectColumnMigrationIsNotSwallowed() {
+        JdbcTemplate jdbc = new JdbcTemplate(new DriverManagerDataSource(
+                "jdbc:h2:mem:usage-fail-" + System.nanoTime() + ";MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "")) {
+            @Override
+            public void execute(String sql) {
+                if (sql != null && sql.contains("ADD COLUMN project_id")) {
+                    throw new org.springframework.jdbc.BadSqlGrammarException("alter", sql,
+                            new java.sql.SQLException("permission denied", "42000", 1142));
+                }
+                super.execute(sql);
+            }
+        };
+        TenantSchema.create(jdbc, JdbcUsageStore.MYSQL_DDL_BEFORE_PROJECT);
+        assertThatThrownBy(() -> new JdbcUsageStore(jdbc, JdbcUsageStore.MYSQL_DDL))
+                .isInstanceOf(org.springframework.jdbc.BadSqlGrammarException.class);
+    }
+
+    @Test
+    void alreadyExistsErrorsAreRecognized() {
+        assertThat(JdbcUsageStore.alreadyExists(new java.sql.SQLException("Duplicate column name 'project_id'", "42S21", 1060)))
+                .isTrue();
+        assertThat(JdbcUsageStore.alreadyExists(new java.sql.SQLException("Duplicate key name 'idx_usage_project_at'", "42000", 1061)))
+                .isTrue();
+        assertThat(JdbcUsageStore.alreadyExists(new java.sql.SQLException("permission denied", "42000", 1142))).isFalse();
+    }
+
+    private static int columnPresent(JdbcTemplate jdbc, String column) {
+        Integer n = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = SCHEMA() "
+                        + "AND LOWER(table_name) = 'token_usage' AND LOWER(column_name) = LOWER(?)",
+                Integer.class, column);
+        return n == null ? 0 : n;
     }
 }

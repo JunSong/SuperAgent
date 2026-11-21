@@ -71,21 +71,33 @@ public class TokenUsageService implements UsageRecorder {
         this.projectStore = projectStore;
     }
 
-    /** Project at record time: task's project first, else the agent's. */
+    /**
+     * Project at record time: task's project first, else the agent's.
+     * Lookup failures must not drop the usage row (projects may live on MySQL while usage is on ClickHouse);
+     * missing {@link com.superagent.core.tenant.TenantContext} still fails fast.
+     */
     private String projectOf(UsageContext context) {
         if (projects == null || context == null) {
             return null;
         }
-        if (context.taskId() != null) {
-            var fromTask = projects.projectOfTask(context.taskId());
-            if (fromTask.isPresent()) {
-                return fromTask.get();
+        try {
+            if (context.taskId() != null) {
+                var fromTask = projects.projectOfTask(context.taskId());
+                if (fromTask.isPresent()) {
+                    return fromTask.get();
+                }
             }
+            if (context.agentId() != null) {
+                return projects.projectOfAgent(context.agentId()).orElse(null);
+            }
+            return null;
+        } catch (IllegalStateException e) {
+            throw e; // no company context, etc. — do not record under the wrong tenant
+        } catch (RuntimeException e) {
+            log.warn("project lookup failed while recording {} usage; saving without projectId: {}",
+                    context.source(), e.toString());
+            return null;
         }
-        if (context.agentId() != null) {
-            return projects.projectOfAgent(context.agentId()).orElse(null);
-        }
-        return null;
     }
 
     /** The task a run counts toward: a subtask's runs count toward its complex task. */
@@ -197,9 +209,20 @@ public class TokenUsageService implements UsageRecorder {
         List<UsageDtos.Total> byTask = group(forTasks, r -> root.apply(r.taskId()), id -> titles.get(id) == null ? "" : titles.get(id));
         List<UsageDtos.Total> byAgent = group(forAgents, r -> r.agentId() == null ? "" : r.agentId(),
                 a -> a.isEmpty() ? "" : agentNames.getOrDefault(a, ""));
-        Map<String, String> projectNames = projectNames();
+        Map<String, String> projectNames = projectNames(user);
+        boolean adminView = user == null;
         List<UsageDtos.Total> byProject = group(people, r -> r.projectId() == null ? "" : r.projectId(),
-                id -> id.isEmpty() ? "" : projectNames.getOrDefault(id, id));
+                id -> {
+                    if (id.isEmpty()) {
+                        return "";
+                    }
+                    String name = projectNames.get(id);
+                    if (name != null) {
+                        return name;
+                    }
+                    // Personal view: hide live names for projects the viewer is no longer in.
+                    return adminView ? id : "";
+                });
         return new UsageDtos.Summary(from, to, total(records), total(forTasks), total(forAgents), byDay,
                 latestFirst(byTask), byAgent, group(records, UsageRecord::model, m -> m),
                 user == null ? group(people, r -> r.user() == null ? "" : r.user(), u -> names.getOrDefault(u, u)) : List.of(),
@@ -207,8 +230,16 @@ public class TokenUsageService implements UsageRecorder {
                 total(forSystem), group(forSystem, r -> r.source() + "|" + r.model(), k -> k));
     }
 
-    private Map<String, String> projectNames() {
+    /**
+     * Admin ({@code viewer == null}): all company project names.
+     * Personal: only projects the viewer is still a member of (amounts still group by stamped id).
+     */
+    private Map<String, String> projectNames(String viewer) {
         Map<String, String> names = new java.util.HashMap<>();
+        if (viewer != null && projects != null) {
+            projects.projectsOf(viewer).forEach(p -> names.put(p.id(), p.name()));
+            return names;
+        }
         if (projectStore != null) {
             projectStore.list().forEach(p -> names.put(p.id(), p.name()));
         }

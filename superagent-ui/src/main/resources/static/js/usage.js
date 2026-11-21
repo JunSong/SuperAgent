@@ -124,7 +124,7 @@ function usRenderDetail() {
       textCols: 1,
       head: [L("us.colProject"), L("us.colModel"), L("us.input"), L("us.cacheRead"), L("us.cacheWrite"),
         L("us.output"), L("us.reasoning"), L("us.colTotal"), L("us.cost"), L("us.colRuns"), L("us.colLast")],
-      cells: r => [r.key ? (r.label || r.key) : L("us.noProject"), (r.models || []).join(", ") || "—",
+      cells: r => [r.key ? (r.label || L("us.hiddenProject")) : L("us.noProject"), (r.models || []).join(", ") || "—",
         usNum(r.input), usNum(r.cacheRead), usNum(r.cacheWrite), usNum(r.output), usNum(r.reasoning),
         usNum(r.total), usCost(r), usNum(r.runs), r.lastAt ? relativeTime(r.lastAt) : "—"],
     }));

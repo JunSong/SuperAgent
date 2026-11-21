@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.within;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -117,6 +118,11 @@ class TokenUsageServiceTest {
         com.superagent.core.project.ProjectAccess access = mock(com.superagent.core.project.ProjectAccess.class);
         when(access.projectOfTask("t1")).thenReturn(Optional.of("p1"));
         when(access.projectOfAgent("dev")).thenReturn(Optional.of("p2"));
+        when(access.projectsOf("ada")).thenReturn(List.of(
+                new com.superagent.core.project.Project("p1", "Alpha", null, "ada",
+                        com.superagent.core.project.ProjectStatus.ACTIVE, Instant.now(), Instant.now(), null),
+                new com.superagent.core.project.Project("p2", "Beta", null, "ada",
+                        com.superagent.core.project.ProjectStatus.ACTIVE, Instant.now(), Instant.now(), null)));
         service.setProjects(access);
         com.superagent.core.project.ProjectStore projectStore = mock(com.superagent.core.project.ProjectStore.class);
         when(projectStore.list()).thenReturn(List.of(
@@ -137,5 +143,71 @@ class TokenUsageServiceTest {
         UsageDtos.Summary summary = service.summary("ada", Instant.EPOCH, Instant.now(), ZoneOffset.UTC);
         assertThat(summary.byProject()).extracting(UsageDtos.Total::key).containsExactly("p2", "p1", "");
         assertThat(summary.byProject()).extracting(UsageDtos.Total::label).containsExactly("Beta", "Alpha", "");
+    }
+
+    @Test
+    void projectLookupFailureStillRecordsUsageWithoutProject() {
+        when(prices.price("m")).thenReturn(Optional.of(new ModelPriceService.Price(1, 1, null, null, "x")));
+        com.superagent.core.project.ProjectAccess access = mock(com.superagent.core.project.ProjectAccess.class);
+        when(access.projectOfTask("t1")).thenThrow(new RuntimeException("mysql down"));
+        service.setProjects(access);
+
+        Double usd = service.record(new UsageContext("ada", UsageContext.SOURCE_TASK, "dev", "t1", null, "claude"),
+                "[{\"model\":\"m\",\"input\":1000000,\"cacheRead\":0,\"cacheWrite\":0,\"cacheWrite1h\":0,\"output\":0,\"reasoning\":0}]");
+
+        assertThat(usd).isNotNull();
+        assertThat(rows).singleElement().satisfies(r -> {
+            assertThat(r.projectId()).isNull();
+            assertThat(r.taskId()).isEqualTo("t1");
+            assertThat(r.total()).isEqualTo(1_000_000);
+        });
+    }
+
+    @Test
+    void missingTenantOnProjectLookupIsNotSwallowed() {
+        com.superagent.core.project.ProjectAccess access = mock(com.superagent.core.project.ProjectAccess.class);
+        when(access.projectOfTask("t1")).thenThrow(new IllegalStateException(
+                "No company context: this work must run inside TenantContext.run(companyId, …)"));
+        service.setProjects(access);
+
+        assertThatThrownBy(() -> service.record(
+                new UsageContext("ada", UsageContext.SOURCE_TASK, "dev", "t1", null, "claude"),
+                "[{\"model\":\"m\",\"input\":1,\"cacheRead\":0,\"cacheWrite\":0,\"cacheWrite1h\":0,\"output\":0,\"reasoning\":0}]"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("No company context");
+        assertThat(rows).isEmpty();
+    }
+
+    @Test
+    void personalUsageHidesNamesForProjectsViewerLeft() {
+        when(prices.price("m")).thenReturn(Optional.of(new ModelPriceService.Price(1, 1, null, null, "x")));
+        Instant now = Instant.now();
+        rows.add(new UsageRecord("r1", now, "ada", "task", null, "t1", "p-left", null, "claude", "m",
+                100, 0, 0, 0, 0, 0, 0.1, null));
+        rows.add(new UsageRecord("r2", now, "ada", "chat", "dev", null, "p-still", null, "claude", "m",
+                200, 0, 0, 0, 0, 0, 0.2, null));
+
+        com.superagent.core.project.ProjectAccess access = mock(com.superagent.core.project.ProjectAccess.class);
+        when(access.projectsOf("ada")).thenReturn(List.of(
+                new com.superagent.core.project.Project("p-still", "Still here", null, "ada",
+                        com.superagent.core.project.ProjectStatus.ACTIVE, now, now, null)));
+        service.setProjects(access);
+        com.superagent.core.project.ProjectStore projectStore = mock(com.superagent.core.project.ProjectStore.class);
+        when(projectStore.list()).thenReturn(List.of(
+                new com.superagent.core.project.Project("p-left", "Secret rename", null, "bob",
+                        com.superagent.core.project.ProjectStatus.ACTIVE, now, now, null),
+                new com.superagent.core.project.Project("p-still", "Still here", null, "ada",
+                        com.superagent.core.project.ProjectStatus.ACTIVE, now, now, null)));
+        service.setProjectStore(projectStore);
+
+        UsageDtos.Summary mine = service.summary("ada", Instant.EPOCH, Instant.now().plusSeconds(1), ZoneOffset.UTC);
+        assertThat(mine.byProject()).filteredOn(t -> "p-left".equals(t.key())).singleElement()
+                .extracting(UsageDtos.Total::label).isEqualTo("");
+        assertThat(mine.byProject()).filteredOn(t -> "p-still".equals(t.key())).singleElement()
+                .extracting(UsageDtos.Total::label).isEqualTo("Still here");
+
+        UsageDtos.Summary company = service.summary(null, Instant.EPOCH, Instant.now().plusSeconds(1), ZoneOffset.UTC);
+        assertThat(company.byProject()).filteredOn(t -> "p-left".equals(t.key())).singleElement()
+                .extracting(UsageDtos.Total::label).isEqualTo("Secret rename");
     }
 }
