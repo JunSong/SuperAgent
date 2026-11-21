@@ -2892,6 +2892,56 @@ public class TaskService implements TaskRecovery {
         return new TaskEventDto(e.type().name().toLowerCase(), e.seq(), e.payload(), e.createdAt());
     }
 
+    /**
+     * Employee handover: stop in-progress tasks owned by {@code fromUserId}, then reassign {@code createdBy}
+     * to {@code toUserId}. Returns how many were forced stopped and how many rows were reassigned.
+     */
+    public TaskHandoverResult transferOwnership(String fromUserId, String toUserId) {
+        if (fromUserId == null || toUserId == null || fromUserId.equals(toUserId)) {
+            return new TaskHandoverResult(0, 0);
+        }
+        List<Task> mine = owned(fromUserId).toList();
+        synchronized (schedulerLock) {
+            Deque<QueuedRun> q = queues.get(fromUserId);
+            if (q != null) {
+                java.util.Set<String> ids = mine.stream().map(Task::id).collect(java.util.stream.Collectors.toSet());
+                q.removeIf(r -> ids.contains(r.taskId()));
+            }
+        }
+        int stopped = 0;
+        int reassigned = 0;
+        for (Task task : mine) {
+            Task current = task;
+            if (current.status() == TaskStatus.RUNNING || current.status() == TaskStatus.NEEDS_CONFIRMATION
+                    || current.status() == TaskStatus.WAITING) {
+                try {
+                    stop(current.id(), fromUserId);
+                } catch (RuntimeException e) {
+                    log.warn("handover stop task {} failed: {}", current.id(), e.getMessage());
+                }
+                current = tasks.findTask(current.id()).orElse(current);
+                if (current.status() == TaskStatus.RUNNING || current.status() == TaskStatus.NEEDS_CONFIRMATION
+                        || current.status() == TaskStatus.WAITING) {
+                    current = current.finished(TaskStatus.STOPPED, current.progress(), "因离职交接停止");
+                    tasks.save(current);
+                    publish(current, null);
+                }
+                stopped++;
+            }
+            current = tasks.findTask(current.id()).orElse(current);
+            if (current.status() != TaskStatus.DELETED && !toUserId.equals(current.createdBy())) {
+                tasks.save(current.withCreatedBy(toUserId));
+                reassigned++;
+            }
+        }
+        tryDispatch(toUserId);
+        log.info("handover tasks from {} to {}: stopped={}, reassigned={}", fromUserId, toUserId, stopped, reassigned);
+        return new TaskHandoverResult(stopped, reassigned);
+    }
+
+    public record TaskHandoverResult(int stopped, int reassigned) {
+    }
+
     @PreDestroy
     void shutdown() {
         executor.shutdownNow();
