@@ -2893,8 +2893,9 @@ public class TaskService implements TaskRecovery {
     }
 
     /**
-     * Employee handover: stop in-progress tasks owned by {@code fromUserId}, then reassign {@code createdBy}
-     * to {@code toUserId}. Returns how many were forced stopped and how many rows were reassigned.
+     * Employee handover: stop actively running tasks owned by {@code fromUserId}, then reassign
+     * {@code createdBy} to {@code toUserId}. {@link TaskStatus#PENDING} / {@link TaskStatus#WAITING}
+     * are only reassigned so the successor’s queue (and waiting parents) can continue.
      */
     public TaskHandoverResult transferOwnership(String fromUserId, String toUserId) {
         if (fromUserId == null || toUserId == null || fromUserId.equals(toUserId)) {
@@ -2912,16 +2913,16 @@ public class TaskService implements TaskRecovery {
         int reassigned = 0;
         for (Task task : mine) {
             Task current = task;
-            if (current.status() == TaskStatus.RUNNING || current.status() == TaskStatus.NEEDS_CONFIRMATION
-                    || current.status() == TaskStatus.WAITING) {
+            // Issue #22: only RUNNING / NEEDS_CONFIRMATION are stop-then-reassign.
+            // PENDING / WAITING keep their status and only change createdBy.
+            if (current.status() == TaskStatus.RUNNING || current.status() == TaskStatus.NEEDS_CONFIRMATION) {
                 try {
                     stop(current.id(), fromUserId);
                 } catch (RuntimeException e) {
                     log.warn("handover stop task {} failed: {}", current.id(), e.getMessage());
                 }
                 current = tasks.findTask(current.id()).orElse(current);
-                if (current.status() == TaskStatus.RUNNING || current.status() == TaskStatus.NEEDS_CONFIRMATION
-                        || current.status() == TaskStatus.WAITING) {
+                if (current.status() == TaskStatus.RUNNING || current.status() == TaskStatus.NEEDS_CONFIRMATION) {
                     current = current.finished(TaskStatus.STOPPED, current.progress(), "因离职交接停止");
                     tasks.save(current);
                     publish(current, null);
