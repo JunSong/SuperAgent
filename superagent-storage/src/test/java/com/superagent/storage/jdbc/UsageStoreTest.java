@@ -85,6 +85,44 @@ class UsageStoreTest {
         assertThat(JdbcUsageStore.alreadyExists(new java.sql.SQLException("permission denied", "42000", 1142))).isFalse();
     }
 
+    @Test
+    void clickHouseSkipsAlterWhenColumnAlreadyPresent() {
+        JdbcTemplate jdbc = org.mockito.Mockito.mock(JdbcTemplate.class);
+        // TenantSchema.isLegacy probes; treat as "table exists with company_id".
+        org.mockito.Mockito.when(jdbc.queryForList(org.mockito.ArgumentMatchers.contains("SELECT 1 FROM token_usage")))
+                .thenReturn(java.util.List.of());
+        org.mockito.Mockito.when(jdbc.queryForList(org.mockito.ArgumentMatchers.contains("SELECT company_id FROM token_usage")))
+                .thenReturn(java.util.List.of());
+        org.mockito.Mockito.when(jdbc.queryForObject(
+                org.mockito.ArgumentMatchers.contains("system.columns"),
+                org.mockito.ArgumentMatchers.eq(Integer.class),
+                org.mockito.ArgumentMatchers.eq("project_id"))).thenReturn(1);
+
+        new JdbcUsageStore(jdbc, JdbcUsageStore.CLICKHOUSE_DDL);
+
+        org.mockito.Mockito.verify(jdbc, org.mockito.Mockito.never()).execute(
+                org.mockito.ArgumentMatchers.contains("ADD COLUMN"));
+    }
+
+    @Test
+    void clickHouseAlterFailureWhenColumnMissingIsNotSwallowed() {
+        JdbcTemplate jdbc = org.mockito.Mockito.mock(JdbcTemplate.class);
+        org.mockito.Mockito.when(jdbc.queryForList(org.mockito.ArgumentMatchers.contains("SELECT 1 FROM token_usage")))
+                .thenReturn(java.util.List.of());
+        org.mockito.Mockito.when(jdbc.queryForList(org.mockito.ArgumentMatchers.contains("SELECT company_id FROM token_usage")))
+                .thenReturn(java.util.List.of());
+        org.mockito.Mockito.when(jdbc.queryForObject(
+                org.mockito.ArgumentMatchers.contains("system.columns"),
+                org.mockito.ArgumentMatchers.eq(Integer.class),
+                org.mockito.ArgumentMatchers.eq("project_id"))).thenReturn(0);
+        org.mockito.Mockito.doThrow(new org.springframework.jdbc.BadSqlGrammarException("alter", "ADD COLUMN",
+                        new java.sql.SQLException("Not enough privileges", "42000", 497)))
+                .when(jdbc).execute(org.mockito.ArgumentMatchers.contains("ADD COLUMN"));
+
+        assertThatThrownBy(() -> new JdbcUsageStore(jdbc, JdbcUsageStore.CLICKHOUSE_DDL))
+                .isInstanceOf(org.springframework.jdbc.BadSqlGrammarException.class);
+    }
+
     private static int columnPresent(JdbcTemplate jdbc, String column) {
         Integer n = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = SCHEMA() "

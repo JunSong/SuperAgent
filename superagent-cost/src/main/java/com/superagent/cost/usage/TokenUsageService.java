@@ -231,13 +231,16 @@ public class TokenUsageService implements UsageRecorder {
     }
 
     /**
-     * Admin ({@code viewer == null}): all company project names.
-     * Personal: only projects the viewer is still a member of (amounts still group by stamped id).
+     * Admin ({@code viewer == null}): all company project names via {@link com.superagent.core.project.ProjectStore}.
+     * Personal: only membership via {@link com.superagent.core.project.ProjectAccess}; if that bean is absent,
+     * return no names (do not fall back to the company-wide store).
      */
     private Map<String, String> projectNames(String viewer) {
         Map<String, String> names = new java.util.HashMap<>();
-        if (viewer != null && projects != null) {
-            projects.projectsOf(viewer).forEach(p -> names.put(p.id(), p.name()));
+        if (viewer != null) {
+            if (projects != null) {
+                projects.projectsOf(viewer).forEach(p -> names.put(p.id(), p.name()));
+            }
             return names;
         }
         if (projectStore != null) {

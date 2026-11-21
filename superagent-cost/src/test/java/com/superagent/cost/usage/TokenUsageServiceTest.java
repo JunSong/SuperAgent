@@ -210,4 +210,22 @@ class TokenUsageServiceTest {
         assertThat(company.byProject()).filteredOn(t -> "p-left".equals(t.key())).singleElement()
                 .extracting(UsageDtos.Total::label).isEqualTo("Secret rename");
     }
+
+    @Test
+    void personalUsageDoesNotFallBackToCompanyProjectStoreWithoutAccess() {
+        Instant now = Instant.now();
+        rows.add(new UsageRecord("r1", now, "ada", "task", null, "t1", "p1", null, "claude", "m",
+                100, 0, 0, 0, 0, 0, 0.1, null));
+        // No ProjectAccess: personal view must not read ProjectStore.list() for live names.
+        com.superagent.core.project.ProjectStore projectStore = mock(com.superagent.core.project.ProjectStore.class);
+        when(projectStore.list()).thenReturn(List.of(
+                new com.superagent.core.project.Project("p1", "Should not leak", null, "bob",
+                        com.superagent.core.project.ProjectStatus.ACTIVE, now, now, null)));
+        service.setProjectStore(projectStore);
+
+        UsageDtos.Summary mine = service.summary("ada", Instant.EPOCH, Instant.now().plusSeconds(1), ZoneOffset.UTC);
+        assertThat(mine.byProject()).filteredOn(t -> "p1".equals(t.key())).singleElement()
+                .extracting(UsageDtos.Total::label).isEqualTo("");
+        org.mockito.Mockito.verify(projectStore, org.mockito.Mockito.never()).list();
+    }
 }

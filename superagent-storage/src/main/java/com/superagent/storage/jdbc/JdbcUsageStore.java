@@ -99,6 +99,7 @@ public class JdbcUsageStore implements UsageStore {
 
     /**
      * Adds {@code project_id} (and its MySQL index) when upgrading an existing table.
+     * Catalog is checked first so deployments that already have the column need no ALTER privilege.
      * Only "already exists" outcomes are ignored; permission / syntax / other failures abort startup.
      */
     private void ensureProjectId(String ddl) {
@@ -108,8 +109,35 @@ public class JdbcUsageStore implements UsageStore {
             ensureMysqlIndex("idx_usage_project_at", "(company_id, project_id, at)");
             return;
         }
-        // ClickHouse: IF NOT EXISTS is idempotent; other errors (permissions, etc.) must surface.
-        jdbc.execute("ALTER TABLE token_usage ADD COLUMN IF NOT EXISTS project_id Nullable(String)");
+        ensureClickHouseColumn("project_id", "Nullable(String)");
+    }
+
+    private void ensureClickHouseColumn(String column, String type) {
+        if (clickHouseColumnPresent(column)) {
+            return;
+        }
+        try {
+            jdbc.execute("ALTER TABLE token_usage ADD COLUMN IF NOT EXISTS " + column + " " + type);
+        } catch (RuntimeException e) {
+            if (alreadyExists(e)) {
+                return;
+            }
+            throw e;
+        }
+    }
+
+    /** {@code true} when {@code system.columns} says the column is there. */
+    private boolean clickHouseColumnPresent(String column) {
+        try {
+            Integer present = jdbc.queryForObject(
+                    "SELECT count() FROM system.columns WHERE database = currentDatabase() "
+                            + "AND table = 'token_usage' AND name = ?",
+                    Integer.class, column);
+            return present != null && present > 0;
+        } catch (RuntimeException e) {
+            // Catalog query failed: fall through to ALTER; real migration errors still abort.
+            return false;
+        }
     }
 
     private void ensureMysqlColumn(String column, String type) {
