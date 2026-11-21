@@ -6,6 +6,7 @@ import com.superagent.core.agent.AgentStore;
 import com.superagent.core.automation.Automation;
 import com.superagent.core.automation.AutomationStore;
 import com.superagent.core.project.ProjectAccess;
+import com.superagent.core.project.ProjectItemKind;
 import com.superagent.core.project.ProjectStore;
 import com.superagent.core.task.Task;
 import com.superagent.core.task.TaskStatus;
@@ -81,6 +82,7 @@ public class AnalyticsService {
         }
         Map<String, ModelTotals> byModel = new LinkedHashMap<>();
         Map<String, ModelTotals> byProject = new LinkedHashMap<>();
+        Map<String, String> taskProjects = projects == null ? Map.of() : projects.projectsOfKind(ProjectItemKind.TASK);
         BigDecimal spend = BigDecimal.ZERO;
         for (Task t : live) {
             int[] created = byDay.get(LocalDate.ofInstant(t.createdAt(), zone));
@@ -96,8 +98,8 @@ public class AnalyticsService {
             BigDecimal cost = t.spend() == null ? BigDecimal.ZERO : t.spend();
             spend = spend.add(cost);
             byModel.computeIfAbsent(t.model() == null ? "" : t.model(), k -> new ModelTotals()).add(cost);
-            String projectId = projects == null ? null : projects.projectOfTask(t.id()).orElse(null);
-            byProject.computeIfAbsent(projectId == null ? "" : projectId, k -> new ModelTotals()).add(cost);
+            String projectId = taskProjects.get(t.id());
+            byProject.computeIfAbsent(projectId == null || projectId.isEmpty() ? "" : projectId, k -> new ModelTotals()).add(cost);
         }
 
         List<AnalyticsDto.Day> daily = new ArrayList<>();

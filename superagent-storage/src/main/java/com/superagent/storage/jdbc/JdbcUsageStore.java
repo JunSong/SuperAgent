@@ -70,14 +70,23 @@ public class JdbcUsageStore implements UsageStore {
     }
 
     private void ensureProjectId(String ddl) {
-        try {
-            if (ddl == MYSQL_DDL) {
+        if (ddl == MYSQL_DDL) {
+            try {
                 jdbc.execute("ALTER TABLE token_usage ADD COLUMN project_id VARCHAR(64)");
-            } else {
-                jdbc.execute("ALTER TABLE token_usage ADD COLUMN IF NOT EXISTS project_id Nullable(String)");
+            } catch (RuntimeException ignored) {
+                // already present
             }
-        } catch (RuntimeException ignored) {
-            // already present (CREATE IF NOT EXISTS / prior ALTER)
+            try {
+                jdbc.execute("ALTER TABLE token_usage ADD KEY idx_usage_project_at (company_id, project_id, at)");
+            } catch (RuntimeException ignored) {
+                // already present
+            }
+        } else {
+            try {
+                jdbc.execute("ALTER TABLE token_usage ADD COLUMN IF NOT EXISTS project_id Nullable(String)");
+            } catch (RuntimeException ignored) {
+                // already present
+            }
         }
     }
 
