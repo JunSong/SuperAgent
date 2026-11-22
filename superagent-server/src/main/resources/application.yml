@@ -64,13 +64,21 @@ superagent:
     # a stuck turn is still stopped, just later. One value for every CLI.
     claude:
       timeout-seconds: ${SUPERAGENT_AGENT_TIMEOUT_SECONDS:3600}
+    codebuddy:
+      timeout-seconds: ${SUPERAGENT_AGENT_TIMEOUT_SECONDS:3600}
     codex:
       timeout-seconds: ${SUPERAGENT_AGENT_TIMEOUT_SECONDS:3600}
     deepseek:
       timeout-seconds: ${SUPERAGENT_AGENT_TIMEOUT_SECONDS:3600}
+    gemini:
+      timeout-seconds: ${SUPERAGENT_AGENT_TIMEOUT_SECONDS:3600}
     grok:
       timeout-seconds: ${SUPERAGENT_AGENT_TIMEOUT_SECONDS:3600}
     kimi:
+      timeout-seconds: ${SUPERAGENT_AGENT_TIMEOUT_SECONDS:3600}
+    minimax:
+      timeout-seconds: ${SUPERAGENT_AGENT_TIMEOUT_SECONDS:3600}
+    qoder:
       timeout-seconds: ${SUPERAGENT_AGENT_TIMEOUT_SECONDS:3600}
     qwen:
       timeout-seconds: ${SUPERAGENT_AGENT_TIMEOUT_SECONDS:3600}
