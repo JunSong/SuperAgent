@@ -6,6 +6,7 @@ import com.superagent.core.gateway.ManagedRun;
 import com.superagent.core.gateway.ModelRunLease;
 import com.superagent.core.gateway.ModelRunLeaseService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
@@ -21,7 +22,10 @@ public class ManagedRunFactory {
     private final CredentialService credentials;
     private ModelRunLeaseService leases;
 
-    public ManagedRunFactory(CredentialService credentials) {
+    /**
+     * {@code @Lazy}: CredentialService → ProviderInferenceProbe → this factory would otherwise cycle at startup.
+     */
+    public ManagedRunFactory(@Lazy CredentialService credentials) {
         this.credentials = credentials;
     }
 

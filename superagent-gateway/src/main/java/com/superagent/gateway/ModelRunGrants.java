@@ -3,6 +3,7 @@ package com.superagent.gateway;
 import com.superagent.core.gateway.ModelRunLease;
 import com.superagent.core.gateway.ModelRunLeaseService;
 import com.superagent.core.tenant.TenantContext;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.web.context.WebServerInitializedEvent;
 import org.springframework.context.event.EventListener;
@@ -37,6 +38,7 @@ public class ModelRunGrants implements ModelRunLeaseService {
     private final boolean configuredSelfUrl;
     private volatile String selfBase;
 
+    @Autowired
     public ModelRunGrants(
             @Value("${superagent.gateway.managed-clis:}") String managedClis,
             @Value("${superagent.gateway.self-url:}") String selfUrl,

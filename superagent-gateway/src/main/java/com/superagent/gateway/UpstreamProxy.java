@@ -46,6 +46,7 @@ public class UpstreamProxy {
     private final QuotaReserveGate reserveGate;
     private GatewayMetering metering; // null in tests / legacy: no ledger
 
+    @Autowired
     public UpstreamProxy(CredentialService credentials, QuotaReserveGate reserveGate) {
         this(credentials, HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(30)).build(), Clock.systemUTC(),
                 reserveGate);
