@@ -98,6 +98,11 @@ public final class ApiPaths {
      */
     public static final String GATEWAY = V1 + "/gateway";
 
+    /** Employee self-service: balance and ledger under the model gateway. */
+    public static final String GATEWAY_ME = GATEWAY + "/me";
+    /** Admin budget ops: allocate / reclaim / company ledger. */
+    public static final String GATEWAY_ADMIN = GATEWAY + "/admin";
+
     private ApiPaths() {
     }
 }
