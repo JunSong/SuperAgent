@@ -2,6 +2,7 @@ package com.superagent.gateway;
 
 import com.superagent.core.gateway.GatewayPolicy;
 import com.superagent.core.gateway.GatewayReportMode;
+import com.superagent.core.gateway.GatewayReportPolicy;
 import com.superagent.core.settings.SystemSettingStore;
 import org.springframework.stereotype.Service;
 
@@ -13,7 +14,7 @@ import java.util.Map;
  * Missing keys fall back to {@link GatewayPolicy#defaults()}.
  */
 @Service
-public class GatewayPolicyService {
+public class GatewayPolicyService implements GatewayReportPolicy {
 
     static final String PENDING_ALERT_HOURS = "gateway.pending.alert-after-hours";
     static final String PENDING_TAKEOVER_DAYS = "gateway.pending.company-takeover-after-business-days";
@@ -24,6 +25,11 @@ public class GatewayPolicyService {
 
     public GatewayPolicyService(SystemSettingStore store) {
         this.store = store;
+    }
+
+    @Override
+    public GatewayReportMode reportMode() {
+        return get().reportMode();
     }
 
     public GatewayPolicy get() {

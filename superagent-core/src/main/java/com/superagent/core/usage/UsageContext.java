@@ -19,4 +19,6 @@ public record UsageContext(String user, String source, String agentId, String ta
     public static final String SOURCE_TASK_TAGS = "task_tags";
     public static final String SOURCE_TRANSCRIBE = "transcribe";
     public static final String SOURCE_SESSION_HANDOFF = "session_handoff";
+    /** Model-gateway settlement projection (#34); used when report mode is GATEWAY_PRIMARY. */
+    public static final String SOURCE_GATEWAY = "gateway";
 }

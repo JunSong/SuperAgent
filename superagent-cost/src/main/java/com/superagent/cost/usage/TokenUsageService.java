@@ -4,16 +4,19 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.superagent.api.usage.UsageDtos;
 import com.superagent.core.agent.Agent;
 import com.superagent.core.agent.AgentStore;
+import com.superagent.core.gateway.GatewayReportMode;
+import com.superagent.core.gateway.GatewayReportPolicy;
+import com.superagent.core.gateway.GatewaySettlementUsage;
 import com.superagent.core.usage.TokenUsage;
 import com.superagent.core.usage.UsageContext;
 import com.superagent.core.usage.UsageRecord;
 import com.superagent.core.usage.UsageRecorder;
 import com.superagent.core.usage.UsageStore;
-import com.superagent.core.user.User;
 import com.superagent.core.user.UserStore;
 import com.superagent.cost.ModelPriceService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -53,10 +56,25 @@ public class TokenUsageService implements UsageRecorder {
 
     private final com.superagent.core.task.TaskStore tasks;
     private com.superagent.core.task.TaskLinkStore links; // null in tests: no subtasks
+    private GatewayReportPolicy reportPolicy; // null in tests / no gateway: LEGACY
+    private GatewaySettlementUsage gatewaySettlements; // null → cannot serve GATEWAY_PRIMARY
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     void setLinks(com.superagent.core.task.TaskLinkStore links) {
         this.links = links;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setGatewayReport(ObjectProvider<GatewayReportPolicy> policy,
+                          ObjectProvider<GatewaySettlementUsage> settlements) {
+        this.reportPolicy = policy == null ? null : policy.getIfAvailable();
+        this.gatewaySettlements = settlements == null ? null : settlements.getIfAvailable();
+    }
+
+    /** Tests wire report mode without Spring. */
+    void setGatewayReportForTest(GatewayReportPolicy policy, GatewaySettlementUsage settlements) {
+        this.reportPolicy = policy;
+        this.gatewaySettlements = settlements;
     }
 
     /** The task a run counts toward: a subtask's runs count toward its complex task. */
@@ -146,7 +164,8 @@ public class TokenUsageService implements UsageRecorder {
 
     /** Usage from {@code from} to {@code to}: {@code user}'s own, or everyone's (null) with a breakdown by person. */
     public UsageDtos.Summary summary(String user, Instant from, Instant to, ZoneId zone) {
-        List<UsageRecord> records = store.between(user, from, to);
+        GatewayReportMode mode = activeReportMode();
+        List<UsageRecord> records = loadForReport(mode, user, from, to);
         Map<String, String> agentNames = agentNames();
         Map<String, String> names = new java.util.HashMap<>();
         if (user == null) {
@@ -167,10 +186,34 @@ public class TokenUsageService implements UsageRecorder {
         List<UsageDtos.Total> byTask = group(forTasks, r -> root.apply(r.taskId()), id -> titles.get(id) == null ? "" : titles.get(id));
         List<UsageDtos.Total> byAgent = group(forAgents, r -> r.agentId() == null ? "" : r.agentId(),
                 a -> a.isEmpty() ? "" : agentNames.getOrDefault(a, ""));
+        // Gateway settlements lack task/agent ids: they land in agentTotal (taskId null) under the payer.
         return new UsageDtos.Summary(from, to, total(records), total(forTasks), total(forAgents), byDay,
                 latestFirst(byTask), byAgent, group(records, UsageRecord::model, m -> m),
                 user == null ? group(people, r -> r.user() == null ? "" : r.user(), u -> names.getOrDefault(u, u)) : List.of(),
-                total(forSystem), group(forSystem, r -> r.source() + "|" + r.model(), k -> k));
+                total(forSystem), group(forSystem, r -> r.source() + "|" + r.model(), k -> k),
+                mode.name());
+    }
+
+    private GatewayReportMode activeReportMode() {
+        if (reportPolicy == null) {
+            return GatewayReportMode.LEGACY;
+        }
+        GatewayReportMode mode = reportPolicy.reportMode();
+        if (mode == GatewayReportMode.GATEWAY_PRIMARY && gatewaySettlements == null) {
+            log.warn("gateway report mode is GATEWAY_PRIMARY but no GatewaySettlementUsage bean; falling back to LEGACY");
+            return GatewayReportMode.LEGACY;
+        }
+        return mode;
+    }
+
+    private List<UsageRecord> loadForReport(GatewayReportMode mode, String user, Instant from, Instant to) {
+        if (mode == GatewayReportMode.GATEWAY_PRIMARY) {
+            return gatewaySettlements.between(user, from, to);
+        }
+        // LEGACY / SHADOW: CLI (and other non-gateway) rows only — avoid double-count if any gateway rows exist.
+        return store.between(user, from, to).stream()
+                .filter(r -> !UsageContext.SOURCE_GATEWAY.equals(r.source()))
+                .toList();
     }
 
     private static List<UsageDtos.Total> latestFirst(List<UsageDtos.Total> rows) {

@@ -45,6 +45,18 @@ public final class UsageDtos {
                            * The system's own background work (checking models and keys), which belongs to nobody:
                            * {@code systemTotal} and one row per kind and model ({@code key} "kind|model"). Company view only.
                            */
-                          Total systemTotal, List<Total> system) {
+                          Total systemTotal, List<Total> system,
+                          /**
+                           * Which source this summary used: {@code LEGACY}/{@code SHADOW} = CLI TOKENS;
+                           * {@code GATEWAY_PRIMARY} = gateway settlement projections (#34).
+                           */
+                          String reportMode) {
+
+        public Summary(Instant from, Instant to, Total total, Total taskTotal, Total agentTotal, List<Total> byDay,
+                       List<Total> tasks, List<Total> agents, List<Total> byModel, List<Total> byUser,
+                       Total systemTotal, List<Total> system) {
+            this(from, to, total, taskTotal, agentTotal, byDay, tasks, agents, byModel, byUser, systemTotal, system,
+                    "LEGACY");
+        }
     }
 }

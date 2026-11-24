@@ -68,6 +68,12 @@ class GatewayMeteringTest {
                     assertThat(p.actualTokens()).isEqualTo(35);
                     assertThat(p.eventType()).isEqualTo("settlement");
                 });
+        assertThat(ledger.between("alice", java.time.Instant.EPOCH, java.time.Instant.now().plusSeconds(60)))
+                .singleElement().satisfies(u -> {
+                    assertThat(u.source()).isEqualTo(com.superagent.core.usage.UsageContext.SOURCE_GATEWAY);
+                    assertThat(u.total()).isEqualTo(35);
+                    assertThat(u.user()).isEqualTo("alice");
+                });
     }
 
     @Test

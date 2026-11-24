@@ -11,6 +11,9 @@ import com.superagent.core.gateway.GatewayProjectionEvent;
 import com.superagent.core.gateway.GatewayQuotaExhaustedException;
 import com.superagent.core.gateway.GatewayQuotaInsufficientException;
 import com.superagent.core.gateway.GatewayQuotaMode;
+import com.superagent.core.gateway.GatewaySettlementUsage;
+import com.superagent.core.usage.UsageContext;
+import com.superagent.core.usage.UsageRecord;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
@@ -23,6 +26,7 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
@@ -32,7 +36,7 @@ import java.util.UUID;
 /**
  * MySQL/H2 ledger for #34: reserve/beginSend/settle, float claim (PR-04), allocate/reclaim/transfer (PR-05).
  */
-public class JdbcGatewayMetering implements GatewayMetering {
+public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUsage {
 
     public static final String ACCOUNT_DDL = """
             CREATE TABLE IF NOT EXISTS gateway_account (
@@ -583,6 +587,50 @@ public class JdbcGatewayMetering implements GatewayMetering {
                         LIMIT ?
                         """,
                 PROJECTION, TenantSchema.company(), period, n);
+    }
+
+    @Override
+    public List<UsageRecord> between(String user, Instant from, Instant to) {
+        if (from == null || to == null) {
+            throw new IllegalArgumentException("from and to are required");
+        }
+        List<Object> args = new ArrayList<>();
+        args.add(TenantSchema.company());
+        args.add(LocalDateTime.ofInstant(from, ZoneOffset.UTC));
+        args.add(LocalDateTime.ofInstant(to, ZoneOffset.UTC));
+        String byUser = "";
+        if (user != null) {
+            byUser = " AND payer_user_id = ?";
+            args.add(user);
+        }
+        String sql = """
+                SELECT id, attempt_id, event_type, line_no, payload_digest, payer_user_id, cli, model,
+                  turn_id, run_id, actual_tokens, at_time
+                FROM gateway_projection
+                WHERE company_id = ? AND event_type = 'settlement'
+                  AND at_time >= ? AND at_time < ?
+                """ + byUser + " ORDER BY at_time ASC, line_no ASC";
+        return jdbc.query(sql, PROJECTION, args.toArray()).stream()
+                .map(JdbcGatewayMetering::toUsageRecord)
+                .toList();
+    }
+
+    /** Vendor total A is one number; park it in input so UsageRecord.total() matches A. */
+    private static UsageRecord toUsageRecord(GatewayProjectionEvent e) {
+        return new UsageRecord(
+                e.id(),
+                e.at(),
+                e.payerUserId(),
+                UsageContext.SOURCE_GATEWAY,
+                null,
+                null,
+                e.turnId(),
+                e.cli(),
+                e.model(),
+                e.actualTokens(),
+                0, 0, 0, 0, 0, 0,
+                null,
+                null);
     }
 
     /**

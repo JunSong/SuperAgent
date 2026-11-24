@@ -48,7 +48,7 @@ const usEl = {
 let usScope = "me"; // "all" on the admin's company page (set by setView)
 let usKind = "agents";
 let usLast = null; // the summary on screen
-const US_SOURCES = ["task", "chat", "superagent", "superagent_background", "model_choice", "memory", "file_tags"];
+const US_SOURCES = ["task", "chat", "superagent", "superagent_background", "model_choice", "memory", "file_tags", "gateway"];
 
 const usNum = n => Number(n || 0).toLocaleString();
 /** A token count short enough for a card: 1.2M, 35.3K. */
@@ -76,8 +76,15 @@ async function loadUsage() {
   usEl.hero.replaceChildren();
   const what = document.createElement("div");
   what.className = "us-hero__what";
+  const mode = s.reportMode || "LEGACY";
+  const periodLabel = usEl.period.selectedOptions[0].textContent;
   what.textContent = L(usEl.period.value === "month" ? "us.heroMonth" : "us.heroPeriod",
-    { period: usEl.period.selectedOptions[0].textContent });
+    { period: periodLabel });
+  if (mode === "GATEWAY_PRIMARY") {
+    what.textContent += " · " + L("us.reportGateway");
+  } else if (mode === "SHADOW") {
+    what.textContent += " · " + L("us.reportShadow");
+  }
   const big = document.createElement("div");
   big.className = "us-hero__cost";
   big.textContent = t.total ? usCost(t) : "$0";

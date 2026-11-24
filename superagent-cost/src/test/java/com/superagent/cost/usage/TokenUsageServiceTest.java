@@ -2,6 +2,7 @@ package com.superagent.cost.usage;
 
 import com.superagent.api.usage.UsageDtos;
 import com.superagent.core.agent.AgentStore;
+import com.superagent.core.gateway.GatewayReportMode;
 import com.superagent.core.usage.UsageContext;
 import com.superagent.core.usage.UsageRecord;
 import com.superagent.core.usage.UsageStore;
@@ -110,5 +111,32 @@ class TokenUsageServiceTest {
         // On the usage page the subtasks show under their complex task, not as tasks of their own.
         assertThat(service.summary("ada", Instant.EPOCH, Instant.now(), ZoneOffset.UTC).tasks())
                 .singleElement().satisfies(t -> assertThat(t.key()).isEqualTo("main"));
+    }
+
+    @Test
+    void gatewayPrimarySummaryUsesSettlementsNotCli() {
+        service.record(new UsageContext("ada", UsageContext.SOURCE_CHAT, "dev", null, "s1", "deepseek"),
+                "[{\"model\":\"cli-model\",\"input\":999,\"cacheRead\":0,\"cacheWrite\":0,\"cacheWrite1h\":0,\"output\":1,\"reasoning\":0}]");
+        UsageRecord settled = new UsageRecord("p1", Instant.parse("2026-11-15T12:00:00Z"), "ada",
+                UsageContext.SOURCE_GATEWAY, null, null, "turn-1", "deepseek", "deepseek-chat",
+                42, 0, 0, 0, 0, 0, 0, null, null);
+        service.setGatewayReportForTest(() -> GatewayReportMode.GATEWAY_PRIMARY,
+                (user, from, to) -> List.of(settled));
+
+        UsageDtos.Summary s = service.summary("ada", Instant.EPOCH, Instant.now(), ZoneOffset.UTC);
+        assertThat(s.reportMode()).isEqualTo("GATEWAY_PRIMARY");
+        assertThat(s.total().total()).isEqualTo(42);
+        assertThat(s.byModel()).singleElement().extracting(UsageDtos.Total::key).isEqualTo("deepseek-chat");
+    }
+
+    @Test
+    void legacySummaryIgnoresGatewaySourceRows() {
+        rows.add(new UsageRecord("g1", Instant.now(), "ada", UsageContext.SOURCE_GATEWAY, null, null, "t", "deepseek",
+                "m", 100, 0, 0, 0, 0, 0, 0, null, null));
+        service.record(new UsageContext("ada", UsageContext.SOURCE_CHAT, null, null, "s", "deepseek"),
+                "[{\"model\":\"cli\",\"input\":7,\"cacheRead\":0,\"cacheWrite\":0,\"cacheWrite1h\":0,\"output\":0,\"reasoning\":0}]");
+        UsageDtos.Summary s = service.summary("ada", Instant.EPOCH, Instant.now(), ZoneOffset.UTC);
+        assertThat(s.reportMode()).isEqualTo("LEGACY");
+        assertThat(s.total().total()).isEqualTo(7);
     }
 }
