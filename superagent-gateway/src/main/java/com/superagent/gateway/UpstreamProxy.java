@@ -43,10 +43,12 @@ public class UpstreamProxy {
     private final CredentialService credentials;
     private final HttpClient http;
     private final Clock clock;
+    private final QuotaReserveGate reserveGate;
     private GatewayMetering metering; // null in tests / legacy: no ledger
 
-    public UpstreamProxy(CredentialService credentials) {
-        this(credentials, HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(30)).build(), Clock.systemUTC());
+    public UpstreamProxy(CredentialService credentials, QuotaReserveGate reserveGate) {
+        this(credentials, HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(30)).build(), Clock.systemUTC(),
+                reserveGate);
     }
 
     /** Tests inject a client pointed at a local stub. */
@@ -55,9 +57,14 @@ public class UpstreamProxy {
     }
 
     public UpstreamProxy(CredentialService credentials, HttpClient http, Clock clock) {
+        this(credentials, http, clock, new QuotaReserveGate(clock));
+    }
+
+    public UpstreamProxy(CredentialService credentials, HttpClient http, Clock clock, QuotaReserveGate reserveGate) {
         this.credentials = credentials;
         this.http = http;
         this.clock = clock;
+        this.reserveGate = reserveGate != null ? reserveGate : new QuotaReserveGate(clock);
     }
 
     @Autowired(required = false)
@@ -185,7 +192,7 @@ public class UpstreamProxy {
             return null; // legacy / unlimited: no ledger gate
         }
         long r = ReservationEstimator.estimate(body);
-        return metering.reserve(new GatewayMetering.ReserveRequest(
+        return reserveGate.reserve(metering, new GatewayMetering.ReserveRequest(
                 UUID.randomUUID().toString(),
                 grant.turnId(),
                 grant.runId(),

@@ -62,6 +62,30 @@ class GatewayMeteringTest {
             assertThat(a.reserved()).isZero();
             assertThat(a.settled()).isEqualTo(35);
         });
+        assertThat(ledger.listProjections(period, 10)).hasSize(1)
+                .first().satisfies(p -> {
+                    assertThat(p.attemptId()).isEqualTo(first.id());
+                    assertThat(p.actualTokens()).isEqualTo(35);
+                    assertThat(p.eventType()).isEqualTo("settlement");
+                });
+    }
+
+    @Test
+    void pendingReconcileSettlesAndProjectsOnce() {
+        JdbcGatewayMetering ledger = newLedger();
+        String period = "2026-11";
+        ledger.putEmployee(period, "alice", 100);
+        GatewayAttempt a = ledger.reserve(new GatewayMetering.ReserveRequest(
+                "req-p", "turn-p", "run-p", "alice", "deepseek", "m", period, 40));
+        assertThat(ledger.beginSend(a.id())).isTrue();
+        ledger.markPending(a.id());
+        assertThat(ledger.listAttempts(GatewayAttemptStatus.PENDING_RECONCILIATION, period, 10)).hasSize(1);
+
+        GatewayAttempt settled = ledger.settle(a.id(), 22);
+        assertThat(settled.status()).isEqualTo(GatewayAttemptStatus.SETTLED);
+        assertThat(settled.actualTokens()).isEqualTo(22);
+        assertThat(ledger.listAttempts(GatewayAttemptStatus.PENDING_RECONCILIATION, period, 10)).isEmpty();
+        assertThat(ledger.listProjections(period, 10)).hasSize(1);
     }
 
     @Test

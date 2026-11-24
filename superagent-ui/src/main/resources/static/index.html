@@ -578,6 +578,18 @@
         </div>
       </div>
       <div class="admin__body us-body">
+        <section class="us-section" id="gwQuotaBox" hidden>
+          <h3 class="us-section__title" data-i18n="gw.quotaTitle">Model quota</h3>
+          <div class="stat-cards us-cards" id="gwQuotaCards"></div>
+          <div class="gw-admin" id="gwAdminBox" hidden>
+            <form class="gw-admin__form" id="gwAllocForm">
+              <input type="text" id="gwAllocUser" data-i18n-ph="gw.userId" placeholder="user id" required />
+              <input type="number" id="gwAllocAmount" min="1" step="1" data-i18n-ph="gw.amount" placeholder="tokens" required />
+              <button type="submit" class="btn" data-i18n="gw.allocate">Allocate</button>
+            </form>
+            <div class="us-card" id="gwPending" hidden></div>
+          </div>
+        </section>
         <section class="us-summary">
           <div class="us-hero" id="usHero"></div>
           <div class="stat-cards us-cards" id="usCards"></div>

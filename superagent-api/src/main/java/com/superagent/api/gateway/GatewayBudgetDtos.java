@@ -46,4 +46,38 @@ public final class GatewayBudgetDtos {
 
     public record LedgerPage(List<LedgerLine> lines) {
     }
+
+    public record AttemptLine(
+            String id,
+            String turnId,
+            String runId,
+            String payerUserId,
+            String cli,
+            String model,
+            String period,
+            long reservedTokens,
+            long actualTokens,
+            String status) {
+    }
+
+    public record AttemptPage(List<AttemptLine> attempts) {
+    }
+
+    /** Admin closes a pending_reconciliation attempt with vendor evidence A. */
+    public record ReconcileRequest(String attemptId, long actualTokens) {
+    }
+
+    public record ProjectionLine(
+            String id,
+            String attemptId,
+            String eventType,
+            int lineNo,
+            String payerUserId,
+            String cli,
+            String model,
+            long actualTokens) {
+    }
+
+    public record ProjectionPage(List<ProjectionLine> projections) {
+    }
 }

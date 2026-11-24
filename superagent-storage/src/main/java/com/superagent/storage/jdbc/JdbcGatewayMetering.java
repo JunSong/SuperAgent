@@ -7,6 +7,7 @@ import com.superagent.core.gateway.GatewayAttemptStatus;
 import com.superagent.core.gateway.GatewayConflictException;
 import com.superagent.core.gateway.GatewayLedgerEntry;
 import com.superagent.core.gateway.GatewayMetering;
+import com.superagent.core.gateway.GatewayProjectionEvent;
 import com.superagent.core.gateway.GatewayQuotaExhaustedException;
 import com.superagent.core.gateway.GatewayQuotaInsufficientException;
 import com.superagent.core.gateway.GatewayQuotaMode;
@@ -16,6 +17,13 @@ import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -81,7 +89,29 @@ public class JdbcGatewayMetering implements GatewayMetering {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """;
 
+    public static final String PROJECTION_DDL = """
+            CREATE TABLE IF NOT EXISTS gateway_projection (
+              company_id      VARCHAR(64)  NOT NULL,
+              id              VARCHAR(64)  NOT NULL,
+              period          VARCHAR(7)   NOT NULL,
+              attempt_id      VARCHAR(64)  NOT NULL,
+              event_type      VARCHAR(32)  NOT NULL,
+              line_no         INT          NOT NULL,
+              payload_digest  VARCHAR(128) NOT NULL,
+              payer_user_id   VARCHAR(128) NOT NULL,
+              cli             VARCHAR(64)  NOT NULL,
+              model           VARCHAR(128) NOT NULL,
+              turn_id         VARCHAR(128) NOT NULL,
+              run_id          VARCHAR(128) NOT NULL,
+              actual_tokens   BIGINT       NOT NULL,
+              at_time         DATETIME(3)  NOT NULL,
+              PRIMARY KEY (company_id, id),
+              UNIQUE KEY uk_gateway_projection_biz (company_id, attempt_id, event_type, line_no)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """;
+
     private static final String POOL_OWNER = "";
+    private static final String EVENT_SETTLEMENT = "settlement";
 
     private static final RowMapper<GatewayAccount> ACCOUNT = (rs, n) -> new GatewayAccount(
             rs.getString("period"),
@@ -121,6 +151,20 @@ public class JdbcGatewayMetering implements GatewayMetering {
             rs.getString("reason"),
             rs.getString("attempt_id"));
 
+    private static final RowMapper<GatewayProjectionEvent> PROJECTION = (rs, n) -> new GatewayProjectionEvent(
+            rs.getString("id"),
+            rs.getString("attempt_id"),
+            rs.getString("event_type"),
+            rs.getInt("line_no"),
+            rs.getString("payload_digest"),
+            rs.getString("payer_user_id"),
+            rs.getString("cli"),
+            rs.getString("model"),
+            rs.getString("turn_id"),
+            rs.getString("run_id"),
+            rs.getLong("actual_tokens"),
+            rs.getObject("at_time", LocalDateTime.class).toInstant(ZoneOffset.UTC));
+
     private final JdbcTemplate jdbc;
     private final TransactionTemplate tx;
 
@@ -131,6 +175,7 @@ public class JdbcGatewayMetering implements GatewayMetering {
         TenantSchema.create(jdbc, ACCOUNT_DDL);
         TenantSchema.create(jdbc, ATTEMPT_DDL);
         TenantSchema.create(jdbc, LEDGER_DDL);
+        TenantSchema.create(jdbc, PROJECTION_DDL);
         ensureColumn("gateway_account", "base_quota", "BIGINT NOT NULL DEFAULT 0");
         ensureColumn("gateway_account", "float_allowance", "BIGINT NOT NULL DEFAULT 0");
         ensureColumn("gateway_account", "float_turn_id", "VARCHAR(128) NULL");
@@ -346,6 +391,7 @@ public class JdbcGatewayMetering implements GatewayMetering {
                     GatewayAttemptStatus.SETTLED.name(), a, company, attemptId);
             writeLedger(company, "settle:" + attemptId, 1, current.period(), current.payerUserId(),
                     refund, -r, a, "SETTLE", attemptId, null);
+            writeSettlementProjection(company, current, a);
             return requireAttempt(company, attemptId);
         });
     }
@@ -503,6 +549,81 @@ public class JdbcGatewayMetering implements GatewayMetering {
                         LIMIT ?
                         """,
                 LEDGER, TenantSchema.company(), period, n);
+    }
+
+    @Override
+    public List<GatewayAttempt> listAttempts(GatewayAttemptStatus status, String period, int limit) {
+        if (status == null || period == null || period.isBlank()) {
+            throw new IllegalArgumentException("status and period are required");
+        }
+        int n = Math.min(Math.max(limit, 1), 500);
+        return jdbc.query("""
+                        SELECT id, request_id, attempt_no, turn_id, run_id, payer_user_id, cli, model, period,
+                          reserved_tokens, actual_tokens, status
+                        FROM gateway_attempt
+                        WHERE company_id = ? AND period = ? AND status = ?
+                        ORDER BY id DESC
+                        LIMIT ?
+                        """,
+                ATTEMPT, TenantSchema.company(), period, status.name(), n);
+    }
+
+    @Override
+    public List<GatewayProjectionEvent> listProjections(String period, int limit) {
+        if (period == null || period.isBlank()) {
+            throw new IllegalArgumentException("period is required");
+        }
+        int n = Math.min(Math.max(limit, 1), 500);
+        return jdbc.query("""
+                        SELECT id, attempt_id, event_type, line_no, payload_digest, payer_user_id, cli, model,
+                          turn_id, run_id, actual_tokens, at_time
+                        FROM gateway_projection
+                        WHERE company_id = ? AND period = ?
+                        ORDER BY at_time DESC, line_no ASC
+                        LIMIT ?
+                        """,
+                PROJECTION, TenantSchema.company(), period, n);
+    }
+
+    /**
+     * Same transaction as settle: idempotent on (attemptId, settlement, lineNo=1).
+     * Same digest → ok; different digest → conflict.
+     */
+    private void writeSettlementProjection(String company, GatewayAttempt attempt, long actualTokens) {
+        int lineNo = 1;
+        String id = sha256Hex(company + "\0" + attempt.id() + "\0" + EVENT_SETTLEMENT + "\0" + lineNo);
+        String payloadDigest = sha256Hex(attempt.payerUserId() + "|" + attempt.cli() + "|" + nullToEmpty(attempt.model())
+                + "|" + attempt.turnId() + "|" + attempt.runId() + "|" + actualTokens);
+        Instant at = Instant.now();
+        try {
+            jdbc.update("""
+                    INSERT INTO gateway_projection (company_id, id, period, attempt_id, event_type, line_no,
+                      payload_digest, payer_user_id, cli, model, turn_id, run_id, actual_tokens, at_time)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    company, id, attempt.period(), attempt.id(), EVENT_SETTLEMENT, lineNo, payloadDigest,
+                    attempt.payerUserId(), attempt.cli(), nullToEmpty(attempt.model()), attempt.turnId(),
+                    attempt.runId(), actualTokens, LocalDateTime.ofInstant(at, ZoneOffset.UTC));
+        } catch (DuplicateKeyException e) {
+            List<String> existing = jdbc.query("""
+                            SELECT payload_digest FROM gateway_projection
+                            WHERE company_id = ? AND attempt_id = ? AND event_type = ? AND line_no = ?
+                            """,
+                    (rs, n) -> rs.getString(1), company, attempt.id(), EVENT_SETTLEMENT, lineNo);
+            if (!existing.isEmpty() && Objects.equals(existing.getFirst(), payloadDigest)) {
+                return;
+            }
+            throw new GatewayConflictException("settlement projection digest mismatch for attempt " + attempt.id());
+        }
+    }
+
+    private static String sha256Hex(String raw) {
+        try {
+            byte[] dig = MessageDigest.getInstance("SHA-256").digest(raw.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(dig);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 unavailable", e);
+        }
     }
 
     private void debitPoolIfPresent(String company, String period, GatewayAccountType type, long amount) {

@@ -2407,6 +2407,12 @@ button.ws-item.is-active { background: #e9e9eb; }
 .us-info { font-size: 13px; font-weight: 400; color: var(--muted-2); cursor: help; }
 .us-info:hover { color: var(--ink); }
 .us-cards { flex: 1 1 520px; margin: 0; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.gw-admin { margin-top: 12px; display: flex; flex-direction: column; gap: 12px; }
+.gw-admin__form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.gw-admin__form input { min-width: 140px; }
+.gw-pending__title { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
+.gw-pending__row { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between;
+  padding: 6px 0; border-top: 1px solid var(--border, #e5e5e5); font-size: 13px; font-variant-numeric: tabular-nums; }
 .us-section { display: flex; flex-direction: column; gap: 12px; }
 .us-section[hidden] { display: none; }
 .us-section__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }

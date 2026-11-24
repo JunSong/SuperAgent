@@ -5,9 +5,12 @@ import com.superagent.api.ApiResponse;
 import com.superagent.api.gateway.GatewayBudgetDtos;
 import com.superagent.core.gateway.GatewayAccount;
 import com.superagent.core.gateway.GatewayAccountType;
+import com.superagent.core.gateway.GatewayAttempt;
+import com.superagent.core.gateway.GatewayAttemptStatus;
 import com.superagent.core.gateway.GatewayLedgerEntry;
 import com.superagent.core.gateway.GatewayMetering;
 import com.superagent.core.gateway.GatewayPeriods;
+import com.superagent.core.gateway.GatewayProjectionEvent;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -20,6 +23,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Clock;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Session-authenticated budget APIs for the model gateway (#34 PR-05).
@@ -114,6 +118,44 @@ public class GatewayBudgetController {
         return ApiResponse.ok(toBalance(a));
     }
 
+    @GetMapping(ApiPaths.GATEWAY_ADMIN + "/attempts")
+    public ApiResponse<GatewayBudgetDtos.AttemptPage> adminAttempts(
+            @RequestParam(defaultValue = "PENDING_RECONCILIATION") String status,
+            @RequestParam(required = false) String period,
+            @RequestParam(defaultValue = "50") int limit) {
+        String p = periodOrCurrent(period);
+        GatewayAttemptStatus st;
+        try {
+            st = GatewayAttemptStatus.valueOf(status.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("unknown attempt status: " + status);
+        }
+        return ApiResponse.ok(new GatewayBudgetDtos.AttemptPage(
+                metering.listAttempts(st, p, limit).stream().map(GatewayBudgetController::toAttempt).toList()));
+    }
+
+    @PostMapping(ApiPaths.GATEWAY_ADMIN + "/reconciliations")
+    public ApiResponse<GatewayBudgetDtos.AttemptLine> reconcile(
+            @RequestBody GatewayBudgetDtos.ReconcileRequest body) {
+        requireBody(body);
+        if (body.attemptId() == null || body.attemptId().isBlank()) {
+            throw new IllegalArgumentException("attemptId is required");
+        }
+        if (body.actualTokens() < 0) {
+            throw new IllegalArgumentException("actualTokens must be >= 0");
+        }
+        return ApiResponse.ok(toAttempt(metering.settle(body.attemptId(), body.actualTokens())));
+    }
+
+    @GetMapping(ApiPaths.GATEWAY_ADMIN + "/projections")
+    public ApiResponse<GatewayBudgetDtos.ProjectionPage> adminProjections(
+            @RequestParam(required = false) String period,
+            @RequestParam(defaultValue = "50") int limit) {
+        String p = periodOrCurrent(period);
+        return ApiResponse.ok(new GatewayBudgetDtos.ProjectionPage(
+                metering.listProjections(p, limit).stream().map(GatewayBudgetController::toProjection).toList()));
+    }
+
     private String periodOrCurrent(String period) {
         return period == null || period.isBlank() ? GatewayPeriods.current(clock) : period;
     }
@@ -132,5 +174,15 @@ public class GatewayBudgetController {
     private static GatewayBudgetDtos.LedgerLine toLine(GatewayLedgerEntry e) {
         return new GatewayBudgetDtos.LedgerLine(e.operationId(), e.entryNo(), e.period(), e.accountType().name(),
                 e.ownerId(), e.deltaAvailable(), e.deltaReserved(), e.deltaSettled(), e.reason());
+    }
+
+    private static GatewayBudgetDtos.AttemptLine toAttempt(GatewayAttempt a) {
+        return new GatewayBudgetDtos.AttemptLine(a.id(), a.turnId(), a.runId(), a.payerUserId(), a.cli(), a.model(),
+                a.period(), a.reservedTokens(), a.actualTokens(), a.status().name());
+    }
+
+    private static GatewayBudgetDtos.ProjectionLine toProjection(GatewayProjectionEvent e) {
+        return new GatewayBudgetDtos.ProjectionLine(e.id(), e.attemptId(), e.eventType(), e.lineNo(),
+                e.payerUserId(), e.cli(), e.model(), e.actualTokens());
     }
 }

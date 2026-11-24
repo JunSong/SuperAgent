@@ -40,11 +40,25 @@ public interface GatewayMetering {
 
     boolean beginSend(String attemptId);
 
+    /**
+     * Records actual usage A (capped at R) and writes an idempotent settlement projection line.
+     * Allowed from SENDING or PENDING_RECONCILIATION (admin reconcile).
+     */
     GatewayAttempt settle(String attemptId, long actualTokens);
 
     GatewayAttempt markPending(String attemptId);
 
     void cancel(String attemptId);
+
+    /** Attempts in {@code status} for the period (newest first). Empty default for in-memory test stubs. */
+    default List<GatewayAttempt> listAttempts(GatewayAttemptStatus status, String period, int limit) {
+        return List.of();
+    }
+
+    /** Settlement projection lines for the period (audit / report replay). */
+    default List<GatewayProjectionEvent> listProjections(String period, int limit) {
+        return List.of();
+    }
 
     /**
      * Admin: move {@code amount} from UNALLOCATED → employee available (increases B).
