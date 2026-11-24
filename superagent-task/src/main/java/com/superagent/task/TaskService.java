@@ -136,11 +136,22 @@ public class TaskService implements TaskRecovery {
     private final SkillService skills;   // null = tasks run without skills (tests)
     private final TaskAgentStore taskAgents;   // null = task→agent links not recorded (tests)
     private CredentialService credentials;     // null in tests: runs use the server's environment
-
+    private com.superagent.platform.provider.ManagedRunFactory managedRuns;
+    private com.superagent.core.gateway.ModelRunLeaseService modelRunLeases;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     void setCredentials(CredentialService credentials) {
         this.credentials = credentials;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setManagedRuns(com.superagent.platform.provider.ManagedRunFactory managedRuns) {
+        this.managedRuns = managedRuns;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setModelRunLeases(com.superagent.core.gateway.ModelRunLeaseService modelRunLeases) {
+        this.modelRunLeases = modelRunLeases;
     }
 
     private com.superagent.core.proxyconfirm.ProxyConfirmGate proxyConfirmGate; // null in tests: nothing is confirmed for anyone
@@ -1931,16 +1942,25 @@ public class TaskService implements TaskRecovery {
             tools.addAll(ComplexTaskMcpTools.ALLOWED);
         }
         String cli = task.agentType().cliName();
+        String model = effectiveModel(task);
         CredentialService.Choice choice = credentials == null ? new CredentialService.Choice(null) : credentials.current(cli);
+        boolean managed = managedRuns != null && managedRuns.managed(cli);
+        // #34: turnId = task.id(); payer = task creator. Managed path injects a run token, never the company Key.
+        com.superagent.core.gateway.ManagedRun managedRun = null;
+        com.superagent.core.chat.RunCredential runCredential = choice.credential();
+        if (managed) {
+            managedRun = managedRuns.open(cli, task.id(), task.createdBy(), model);
+            runCredential = managedRun.credential();
+        }
         AgentRunRequest request = new AgentRunRequest(
                 agentSessionId, sessionFirstTurn ? null : agentSessionId, task.workspaceDir(),
                 !wrapBriefPrompt ? prompt
                         // a reused conversation holds the tasks before it: say where this one starts (coding: runCoding)
                         : sessionFirstTurn ? wrapBrief(task, prompt) : NEW_TASK_NOTE + "\n\n" + wrapBrief(task, prompt),
-                effectiveModel(task),
+                model,
                 tools, skipPermissions && !readOnly, McpGrants.withServers(grant == null ? null : mcpGrants.mcpConfig(grant), connected),
                 taskSystemPrompt(task, grant != null),
-                nextTurnImages.remove(task.id()), null, choice.credential());
+                nextTurnImages.remove(task.id()), null, runCredential);
         try {
             timer.attemptStarted();
             try {
@@ -1949,8 +1969,9 @@ public class TaskService implements TaskRecovery {
                 timer.attemptEnded();
             }
             // The endpoint or key failed before the agent produced anything: switch keys and run the turn again.
+            // Managed runs rotate Keys inside the gateway — do not put the next company Key into the CLI.
             boolean nothingSaid = text.isEmpty() && result.get() == null;
-            if (credentials != null && nothingSaid && error.get() != null && !cancellation.isCancelled()) {
+            if (!managed && credentials != null && nothingSaid && error.get() != null && !cancellation.isCancelled()) {
                 java.util.Optional<CredentialService.Choice> next = credentials.failover(cli, choice, error.get());
                 if (next.isPresent()) {
                     log.info("task {}: retrying the turn on endpoint {}", task.id(), next.get().id());
@@ -1964,6 +1985,9 @@ public class TaskService implements TaskRecovery {
                 }
             }
         } finally {
+            if (managedRun != null) {
+                managedRun.close(modelRunLeases);
+            }
             if (grant != null) {
                 mcpGrants.close(grant);
             }

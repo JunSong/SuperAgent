@@ -348,11 +348,16 @@ public class ChatService implements org.springframework.context.SmartLifecycle {
      * over), and the agent's long-term memory — not the old conversation — is what the new one starts from.
      */
     public ChatSession sessionForTurn(Agent agent, String model) {
-        return sessionForTurn(agent, model, false);
+        return sessionForTurn(agent, model, false, agent.owner(), null);
     }
 
     /** {@code modelDown}: the move is because the previous model couldn't run, not because the choice changed. */
     private ChatSession sessionForTurn(Agent agent, String model, boolean modelDown) {
+        return sessionForTurn(agent, model, modelDown, agent.owner(), null);
+    }
+
+    private ChatSession sessionForTurn(Agent agent, String model, boolean modelDown, String payerUserId,
+                                       String turnId) {
         ChatSession current = currentSession(agent.id()).orElse(null);
         if (current == null || memory.modelChanged(agent.id(), model)) {
             boolean switching = current != null;
@@ -369,7 +374,7 @@ public class ChatService implements org.springframework.context.SmartLifecycle {
         } else {
             String tooLong = tooLong(current);
             if (tooLong != null) {
-                current = rotateForLength(agent, current, model, tooLong);
+                current = rotateForLength(agent, current, model, tooLong, payerUserId, turnId);
             }
         }
         memory.recordModel(agent, model);
@@ -395,11 +400,15 @@ public class ChatService implements org.springframework.context.SmartLifecycle {
     }
 
     /** Moves a too-long session to a fresh one, carrying a cheap-model summary of it; the turn never fails for want of one. */
-    private ChatSession rotateForLength(Agent agent, ChatSession old, String model, String why) {
+    private ChatSession rotateForLength(Agent agent, ChatSession old, String model, String why, String payerUserId,
+                                        String turnId) {
         java.util.concurrent.atomic.AtomicReference<String> failed = new java.util.concurrent.atomic.AtomicReference<>();
         String summary = null;
         try {
-            summary = memory.handoff(agent, store.listMessages(old.id()), AgentMemoryService.HANDOFF_TIMEOUT, failed::set);
+            // #34: handoff summary is billed to the chat sender who triggered the rotation, not agent.owner().
+            // Same turnId as the upcoming reply when this rotation is part of a send.
+            summary = memory.handoff(agent, store.listMessages(old.id()), AgentMemoryService.HANDOFF_TIMEOUT, failed::set,
+                    payerUserId, turnId);
         } catch (RuntimeException e) {
             failed.set(e.getMessage());
         }
@@ -627,10 +636,12 @@ public class ChatService implements org.springframework.context.SmartLifecycle {
             }
         }
         String model = resolveModel(agent);
+        // #34: mint the turn id before sessionForTurn so a length handoff summary shares this turn with the reply.
+        String userMessageId = UUID.randomUUID().toString();
         try {
         if (agent != null) {
             // The agent's current session, or a new one if the model changed; never an older one the page still shows.
-            session = sessionForTurn(agent, model);
+            session = sessionForTurn(agent, model, false, user, userMessageId);
             sessionId = session.id();
         }
         // The model decides the CLI (a Codex model must run under codex); unknown models keep the session's own.
@@ -656,7 +667,6 @@ public class ChatService implements org.springframework.context.SmartLifecycle {
         final String systemPrompt = joinPrompt(basePrompt, styleGuidePrompt(agent, content));
 
         // Images are stored under the user message's id before it's appended, so a bad upload stores nothing.
-        String userMessageId = UUID.randomUUID().toString();
         List<ImageAttachment> attached = new ArrayList<>(images.save(sessionId, userMessageId, uploads));
         FileService.Delivered delivered = fileIds == null || fileIds.isEmpty() ? null
                 : FileService.deliver(files.attach(fileIds, user, sessionId, userMessageId), session.workspaceDir());
@@ -870,7 +880,8 @@ public class ChatService implements org.springframework.context.SmartLifecycle {
                 model = next;
                 agentType = nextType;
                 runner = runners.get(nextType);
-                ChatSession moved = sessionForTurn(agent, next, true); // another model: a new session, from memory + recent messages
+                // Keep the same turnId (userMessageId); attempt() issues a fresh run token for the new CLI.
+                ChatSession moved = sessionForTurn(agent, next, true, user, userMessageId);
                 attempt = attempt(moved, agentType, runner, model, systemPrompt, memory.context(agent, Set.of(userMessageId), user),
                         prompt, attached, user, userMessageId, assistantMessageId, emitter, cancellation);
             }

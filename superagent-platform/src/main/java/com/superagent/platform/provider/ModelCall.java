@@ -44,10 +44,22 @@ public class ModelCall {
     }
 
     private com.superagent.core.usage.UsageRecorder usage; // null in tests: tokens aren't kept
+    private ManagedRunFactory managedRuns;
+    private com.superagent.core.gateway.ModelRunLeaseService modelRunLeases;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     void setUsageRecorder(com.superagent.core.usage.UsageRecorder usage) {
         this.usage = usage;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setManagedRuns(ManagedRunFactory managedRuns) {
+        this.managedRuns = managedRuns;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setModelRunLeases(com.superagent.core.gateway.ModelRunLeaseService modelRunLeases) {
+        this.modelRunLeases = modelRunLeases;
     }
 
     /**
@@ -76,14 +88,28 @@ public class ModelCall {
         };
         Cancellation cancellation = new Cancellation();
         var timeout = timer.schedule(cancellation::cancel, timeoutSeconds, TimeUnit.SECONDS);
+        com.superagent.core.gateway.ManagedRun managed = null;
         try {
+            String cli = type.cliName();
+            com.superagent.core.chat.RunCredential runCredential = credentials.current(cli).credential();
+            if (managedRuns != null) {
+                String payer = paying == null || paying.user() == null || paying.user().isBlank()
+                        ? ProviderInferenceProbe.SYSTEM_USER : paying.user();
+                String turnId = paying != null && paying.taskId() != null && !paying.taskId().isBlank()
+                        ? paying.taskId()
+                        : "ask-" + UUID.randomUUID();
+                managed = managedRuns.open(cli, turnId, payer, model);
+                runCredential = managed.credential();
+            }
             runners.get(type).run(new AgentRunRequest(UUID.randomUUID().toString(), null, scratch.toString(), prompt,
-                    model, List.of(), false, null, null, List.of(), null,
-                    credentials.current(type.cliName()).credential()),
+                    model, List.of(), false, null, null, List.of(), null, runCredential),
                     com.superagent.core.usage.UsageRecorder.tap(usage, paying == null ? null : new com.superagent.core.usage.UsageContext(
                             paying.user(), paying.source(), paying.agentId(), paying.taskId(), paying.sessionId(), type.cliName()), sink),
                     cancellation);
         } finally {
+            if (managed != null) {
+                managed.close(modelRunLeases);
+            }
             timeout.cancel(false);
             try (Stream<Path> walk = Files.walk(scratch)) {
                 walk.sorted(Comparator.reverseOrder()).forEach(p -> p.toFile().delete());

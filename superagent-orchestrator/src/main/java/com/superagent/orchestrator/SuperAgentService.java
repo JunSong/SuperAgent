@@ -175,11 +175,22 @@ public class SuperAgentService {
     }
 
     private CredentialService credentials; // null in tests: runs use the server's environment
-
+    private com.superagent.platform.provider.ManagedRunFactory managedRuns;
+    private com.superagent.core.gateway.ModelRunLeaseService modelRunLeases;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     void setCredentials(CredentialService credentials) {
         this.credentials = credentials;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setManagedRuns(com.superagent.platform.provider.ManagedRunFactory managedRuns) {
+        this.managedRuns = managedRuns;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setModelRunLeases(com.superagent.core.gateway.ModelRunLeaseService modelRunLeases) {
+        this.modelRunLeases = modelRunLeases;
     }
     private final Duration quiet;
     private final Duration maxWait;
@@ -410,14 +421,22 @@ public class SuperAgentService {
         if (grant != null) {
             backgroundGrants.put(grant.token(), external);
         }
+        com.superagent.core.gateway.ManagedRun managed = null;
         try {
             if (runner == null) {
                 throw new IllegalStateException("No runner for " + type);
             }
+            String cli = type.cliName();
+            com.superagent.core.chat.RunCredential runCredential =
+                    credentials == null ? null : credentials.current(cli).credential();
+            if (managedRuns != null) {
+                // #34: SuperAgent background round — payer is the owner who owns this SuperAgent.
+                managed = managedRuns.open(cli, session.id(), owner, model);
+                runCredential = managed.credential();
+            }
             runner.run(new AgentRunRequest(session.id(), agentSessionId, session.workspaceDir(), roundPrompt(owner, batch),
                     model, external ? EXTERNAL_ROUND_TOOLS : BACKGROUND_TOOLS, false, grant == null ? null : grants.mcpConfig(grant),
-                    SuperAgentPrompts.background(teamLimit), List.of(), context,
-                    credentials == null ? null : credentials.current(type.cliName()).credential()),
+                    SuperAgentPrompts.background(teamLimit), List.of(), context, runCredential),
                     com.superagent.core.usage.UsageRecorder.tap(usage, new com.superagent.core.usage.UsageContext(owner,
                             com.superagent.core.usage.UsageContext.SOURCE_BACKGROUND, sa.id(), null, session.id(), type.cliName()),
                             sink), new Cancellation());
@@ -425,6 +444,9 @@ public class SuperAgentService {
             log.warn("superagent round attempt failed for {}: {}", owner, e.getMessage());
             error.set(e.getMessage() != null ? e.getMessage() : "round failed");
         } finally {
+            if (managed != null) {
+                managed.close(modelRunLeases);
+            }
             if (grant != null) {
                 backgroundGrants.remove(grant.token());
             }

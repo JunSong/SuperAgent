@@ -71,10 +71,22 @@ public class AgentMemoryService {
     private final Map<AgentType, AgentRunner> runners = new EnumMap<>(AgentType.class);
 
     private CredentialService credentials; // null in tests: runs use the server's environment
+    private com.superagent.platform.provider.ManagedRunFactory managedRuns;
+    private com.superagent.core.gateway.ModelRunLeaseService modelRunLeases;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     void setCredentials(CredentialService credentials) {
         this.credentials = credentials;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setManagedRuns(com.superagent.platform.provider.ManagedRunFactory managedRuns) {
+        this.managedRuns = managedRuns;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setModelRunLeases(com.superagent.core.gateway.ModelRunLeaseService modelRunLeases) {
+        this.modelRunLeases = modelRunLeases;
     }
     private final int minMessages;
     private final Duration settle;
@@ -494,15 +506,31 @@ public class AgentMemoryService {
      * (the new session then starts from memory and recent messages alone). The reason is returned in {@code why}.
      */
     public String handoff(Agent agent, List<ChatMessage> session, Duration timeout, java.util.function.Consumer<String> why) {
+        return handoff(agent, session, timeout, why, agent.owner(), null);
+    }
+
+    /**
+     * @param payerUserId who pays for the summary model call. Under the model gateway (#34), a shared-agent
+     *                    handoff triggered by a chat turn is billed to the message sender, not {@code agent.owner()}.
+     * @param turnId      chat {@code userMessageId} when this handoff is part of that turn; null makes a memory-only id.
+     */
+    public String handoff(Agent agent, List<ChatMessage> session, Duration timeout, java.util.function.Consumer<String> why,
+                          String payerUserId) {
+        return handoff(agent, session, timeout, why, payerUserId, null);
+    }
+
+    public String handoff(Agent agent, List<ChatMessage> session, Duration timeout, java.util.function.Consumer<String> why,
+                          String payerUserId, String turnId) {
         String transcript = AgentMemoryRules.carryOver(session, zone, recentMessages);
         if (transcript.isBlank()) {
             why.accept("旧会话没有内容");
             return null;
         }
+        String payer = payerUserId == null || payerUserId.isBlank() ? agent.owner() : payerUserId;
         Cancellation cancel = new Cancellation();
         java.util.concurrent.FutureTask<String> run = new java.util.concurrent.FutureTask<>(() ->
                 runCheap(agent, AgentMemoryRules.handoffPrompt(agent.name(), transcript),
-                        com.superagent.core.usage.UsageContext.SOURCE_SESSION_HANDOFF, cancel));
+                        com.superagent.core.usage.UsageContext.SOURCE_SESSION_HANDOFF, cancel, payer, turnId));
         Thread worker = new Thread(TenantContext.wrap(run), "session-handoff");
         worker.setDaemon(true);
         worker.start();
@@ -527,6 +555,11 @@ public class AgentMemoryService {
     }
 
     private String runCheap(Agent agent, String prompt, String source, Cancellation cancellation) {
+        return runCheap(agent, prompt, source, cancellation, agent.owner(), null);
+    }
+
+    private String runCheap(Agent agent, String prompt, String source, Cancellation cancellation, String payerUserId,
+                            String turnId) {
         String model = (modelRouter == null ? java.util.Optional.<com.superagent.core.provider.ModelRouter.ModelChoice>empty()
                 : modelRouter.cheapest()).map(com.superagent.core.provider.ModelRouter.ModelChoice::model)
                 .orElseGet(settings::agentDefaultModel);
@@ -553,15 +586,24 @@ public class AgentMemoryService {
                 default -> { /* no tools here; nothing else to keep */ }
             }
         };
+        com.superagent.core.gateway.ManagedRun managed = null;
         try {
+            String cli = type.cliName();
+            String tid = turnId == null || turnId.isBlank() ? "memory-" + UUID.randomUUID() : turnId;
+            if (managedRuns != null) {
+                managed = managedRuns.open(cli, tid, payerUserId, model);
+            }
             runner.run(new AgentRunRequest(UUID.randomUUID().toString(), null, scratch.toString(), prompt, model,
                     List.of(), false, null, null, List.of(), null,
-                    credentials == null ? null : credentials.current(type.cliName()).credential()),
-                    // Keeping an agent's memory is part of using it: on its owner.
-                    com.superagent.core.usage.UsageRecorder.tap(usage, new com.superagent.core.usage.UsageContext(agent.owner(),
+                    managed != null ? managed.credential()
+                            : (credentials == null ? null : credentials.current(cli).credential())),
+                    com.superagent.core.usage.UsageRecorder.tap(usage, new com.superagent.core.usage.UsageContext(payerUserId,
                             source, agent.id(), null, null, type.cliName()), sink),
                     cancellation);
         } finally {
+            if (managed != null) {
+                managed.close(modelRunLeases);
+            }
             deleteQuietly(scratch);
         }
         String out = result.get() != null ? result.get() : text.toString();

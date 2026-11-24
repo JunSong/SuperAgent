@@ -101,6 +101,7 @@ public class Transcriber {
     private final Api api;
     private final Supplier<Ffmpeg> ffmpeg; // gives null: the server has none, so only files the API takes as they are
     private UsageRecorder usage; // null in tests
+    private com.superagent.core.gateway.ModelRunLeaseService modelRunLeases; // null / unmanaged: legacy OpenAI path
 
     @Autowired
     public Transcriber(CredentialService credentials, FfmpegService ffmpeg) {
@@ -125,6 +126,21 @@ public class Transcriber {
     @Autowired(required = false)
     void setUsage(UsageRecorder usage) {
         this.usage = usage;
+    }
+
+    @Autowired(required = false)
+    void setModelRunLeases(com.superagent.core.gateway.ModelRunLeaseService modelRunLeases) {
+        this.modelRunLeases = modelRunLeases;
+    }
+
+    /**
+     * #34 PR-02: media transcription is not yet adapted to the model gateway. When the Codex CLI is on
+     * {@code managed-clis}, refuse before any vendor call so the company Key never leaves the control plane here.
+     */
+    private void refuseIfManaged() {
+        if (modelRunLeases != null && modelRunLeases.managed(PROVIDER)) {
+            throw new NeedsUserException("语音转写尚未接入模型网关：受管试点下已禁用，请先从 managed-clis 去掉 codex，或等待媒体路径适配");
+        }
     }
 
     /**
@@ -191,6 +207,10 @@ public class Transcriber {
 
     /** Whether each OpenAI transcription model answers on the company's key; empty-handed results without one. */
     List<com.superagent.core.media.SpeechEngine.Probe> probe(java.util.function.BiConsumer<RunCredential, String> send) {
+        if (modelRunLeases != null && modelRunLeases.managed(PROVIDER)) {
+            return USD_PER_MINUTE.keySet().stream().sorted().map(m -> new com.superagent.core.media.SpeechEngine.Probe(m,
+                    timed(m), false, "受管试点下语音转写已禁用（未适配模型网关）")).toList();
+        }
         CredentialService.Choice choice;
         try {
             choice = credentials.current(PROVIDER);
@@ -210,6 +230,7 @@ public class Transcriber {
     }
 
     private Piece call(Path piece, Request request) {
+        refuseIfManaged();
         CredentialService.Choice choice;
         try {
             choice = credentials.current(PROVIDER);

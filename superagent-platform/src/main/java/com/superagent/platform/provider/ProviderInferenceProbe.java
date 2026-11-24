@@ -56,6 +56,7 @@ public class ProviderInferenceProbe {
 
     /** Looked up when a check is booked: the recorder needs prices, which need the providers this probe serves. */
     private org.springframework.beans.factory.ObjectProvider<com.superagent.core.usage.UsageRecorder> usage; // null in tests
+    private ManagedRunFactory managedRuns; // null in tests / unmanaged
 
     public ProviderInferenceProbe(ProviderProbe probe) {
         this.probe = probe;
@@ -64,6 +65,21 @@ public class ProviderInferenceProbe {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     void setUsageRecorder(org.springframework.beans.factory.ObjectProvider<com.superagent.core.usage.UsageRecorder> usage) {
         this.usage = usage;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setManagedRuns(ManagedRunFactory managedRuns) {
+        this.managedRuns = managedRuns;
+    }
+
+    /**
+     * #34 PR-02: CLI probes that inject a company Key into a subprocess are not yet adapted. Control-plane
+     * HTTP checks (DeepSeek chat completions, etc.) stay allowed — the Key never leaves the JVM.
+     */
+    private void refuseCliProbeIfManaged(String providerKey) throws IOException {
+        if (managedRuns != null && managedRuns.managed(providerKey)) {
+            throw new IOException("该 CLI 的进程探测尚未接入模型网关：受管试点下已禁用，健康状态保持上次结果");
+        }
     }
 
     /** What this check cost, on "system". */
@@ -153,6 +169,7 @@ public class ProviderInferenceProbe {
      */
     private com.superagent.core.usage.TokenUsage checkCodeBuddy(String modelId, RunCredential credential)
             throws IOException, InterruptedException {
+        refuseCliProbeIfManaged("codebuddy");
         if (credential == null) {
             throw new IOException("还没有配置 API Key");
         }
@@ -197,6 +214,7 @@ public class ProviderInferenceProbe {
      */
     private com.superagent.core.usage.TokenUsage checkGemini(String modelId, RunCredential credential)
             throws IOException, InterruptedException {
+        refuseCliProbeIfManaged("gemini");
         if (credential == null) {
             throw new IOException("还没有配置 API Key");
         }
@@ -251,6 +269,7 @@ public class ProviderInferenceProbe {
      */
     private com.superagent.core.usage.TokenUsage checkMinimax(String modelId, RunCredential credential)
             throws IOException, InterruptedException {
+        refuseCliProbeIfManaged("minimax");
         if (credential == null) {
             throw new IOException("还没有配置 API Key");
         }
@@ -394,6 +413,7 @@ public class ProviderInferenceProbe {
      */
     private com.superagent.core.usage.TokenUsage checkQoder(String modelId, RunCredential credential)
             throws IOException, InterruptedException {
+        refuseCliProbeIfManaged("qoder");
         if (credential == null) {
             throw new IOException("还没有配置 API Key");
         }
@@ -551,6 +571,7 @@ public class ProviderInferenceProbe {
     }
 
     private com.superagent.core.usage.TokenUsage checkClaudeCli(String modelId) throws IOException, InterruptedException {
+        refuseCliProbeIfManaged("claude");
         Path claude = probe.findBinary("claude").orElseThrow(() -> new IOException("claude is not installed"));
         String out = run(List.of(claude.toString(), "-p", "--output-format", "json", "--max-turns", "1",
                 "--model", modelId, "--", PROMPT), null);
@@ -591,6 +612,7 @@ public class ProviderInferenceProbe {
             return new com.superagent.core.usage.TokenUsage(modelId, Math.max(0, u.path("input_tokens").asLong(0) - cached), cached,
                     0, 0, u.path("output_tokens").asLong(0), u.path("output_tokens_details").path("reasoning_tokens").asLong(0), null);
         }
+        refuseCliProbeIfManaged("codex");
         Path codex = probe.findBinary("codex").orElseThrow(() -> new IOException("codex is not installed"));
         // Read-only sandbox, prompt on stdin: the probe can't touch anything even if the model tried.
         List<String> argv = new java.util.ArrayList<>(List.of(codex.toString(), "exec", "--json", "--skip-git-repo-check",

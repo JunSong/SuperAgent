@@ -99,4 +99,26 @@ class TranscriberTest {
         assertThat(r.segments()).extracting(Transcriber.Segment::start).containsExactly(1.0, 1201.0);
         assertThat(r.seconds()).isEqualTo(2400.0);
     }
+
+    @Test
+    void managedCodexBlocksTranscriptionWithZeroOutbound() throws Exception {
+        com.superagent.core.gateway.ModelRunLeaseService leases = mock(com.superagent.core.gateway.ModelRunLeaseService.class);
+        when(leases.managed("codex")).thenReturn(true);
+        List<String> called = new ArrayList<>();
+        Transcriber t = new Transcriber(credentials, (c, f, r) -> {
+            called.add(c.apiKey());
+            return OpenAiTranscriptions.parse("{\"duration\": 1, \"segments\": []}");
+        }, null);
+        t.setModelRunLeases(leases);
+        Path audio = Files.write(tmp.resolve("clip.mp3"), new byte[]{1});
+
+        assertThatThrownBy(() -> t.transcribe(audio, null, null))
+                .isInstanceOf(NeedsUserException.class)
+                .hasMessageContaining("尚未接入模型网关");
+        assertThat(called).isEmpty();
+
+        assertThat(t.probe((c, m) -> called.add(c.apiKey())))
+                .allSatisfy(p -> assertThat(p.ok()).isFalse());
+        assertThat(called).isEmpty();
+    }
 }
