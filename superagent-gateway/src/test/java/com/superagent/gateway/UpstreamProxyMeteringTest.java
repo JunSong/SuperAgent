@@ -6,6 +6,7 @@ import com.superagent.core.gateway.GatewayAccount;
 import com.superagent.core.gateway.GatewayAccountType;
 import com.superagent.core.gateway.GatewayAttempt;
 import com.superagent.core.gateway.GatewayAttemptStatus;
+import com.superagent.core.gateway.GatewayLedgerEntry;
 import com.superagent.core.gateway.GatewayMetering;
 import com.superagent.core.gateway.GatewayQuotaInsufficientException;
 import com.superagent.core.gateway.GatewayQuotaMode;
@@ -25,6 +26,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -69,7 +71,7 @@ class UpstreamProxyMeteringTest {
     void secondReserveFailsWithZeroOutboundWhileFirstHeld() throws Exception {
         Clock clock = Clock.fixed(Instant.parse("2026-11-15T12:00:00Z"), ZoneOffset.UTC);
         MemoryMetering ledger = new MemoryMetering();
-        ledger.putEmployee("2026-11", "alice", 100);
+        ledger.putEmployee("2026-11", "alice", 400);
 
         CredentialService credentials = mock(CredentialService.class);
         when(credentials.current(eq("deepseek")))
@@ -79,12 +81,6 @@ class UpstreamProxyMeteringTest {
         UpstreamProxy proxy = new UpstreamProxy(credentials, HttpClient.newHttpClient(), clock);
         proxy.setMetering(ledger);
 
-        // Force estimator R=60 via oversized max_tokens? Floor is 256 — use a custom metering that ignores body size.
-        // Instead: put balance 100 and use a body whose estimate is 60 by temporarily replacing — simpler: seed
-        // available 100 and patch estimator by using MemoryMetering that reserves the request's reservedTokens
-        // from a fixed estimator override. Here we call reserve through proxy with body sized for R=60:
-        // input + 256 = 60 ⇒ input = -196 impossible. So set balance 400, first R≈257, leftover < 257.
-        ledger.putEmployee("2026-11", "alice", 400);
         byte[] body = "{\"max_tokens\":10}".getBytes(StandardCharsets.UTF_8);
         long r = ReservationEstimator.estimate(body);
 
@@ -97,7 +93,7 @@ class UpstreamProxyMeteringTest {
         assertThat(stubHits.get()).isEqualTo(1);
         assertThat(ledger.findEmployee("2026-11", "alice").orElseThrow().available()).isEqualTo(400 - r);
 
-        ledger.putEmployee("2026-11", "alice", r - 1); // cannot cover another identical R
+        ledger.putEmployee("2026-11", "alice", r - 1);
 
         ModelRunLease lease2 = TenantContext.call("co1",
                 () -> grants.issue("t2", "r2", "alice", "deepseek", "m", Duration.ofMinutes(5)));
@@ -108,7 +104,6 @@ class UpstreamProxyMeteringTest {
         assertThat(stubHits.get()).isEqualTo(1);
     }
 
-    /** Minimal in-memory ledger for proxy wiring (JDBC acceptance lives in storage tests). */
     static final class MemoryMetering implements GatewayMetering {
         private final Map<String, AtomicLong> available = new ConcurrentHashMap<>();
         private final Map<String, AtomicLong> reserved = new ConcurrentHashMap<>();
@@ -125,13 +120,28 @@ class UpstreamProxyMeteringTest {
         }
 
         @Override
+        public void putEmployee(String period, String userId, long avail, long settled, long baseQuota, long floatAllowance) {
+            putEmployee(period, userId, avail);
+        }
+
+        @Override
+        public void putPool(String period, GatewayAccountType type, long avail) {
+        }
+
+        @Override
         public Optional<GatewayAccount> findEmployee(String period, String userId) {
-            AtomicLong a = available.get(key(period, userId));
+            return findAccount(period, GatewayAccountType.EMPLOYEE, userId);
+        }
+
+        @Override
+        public Optional<GatewayAccount> findAccount(String period, GatewayAccountType type, String ownerId) {
+            AtomicLong a = available.get(key(period, ownerId));
             if (a == null) {
                 return Optional.empty();
             }
-            return Optional.of(new GatewayAccount(period, GatewayAccountType.EMPLOYEE, userId,
-                    GatewayQuotaMode.LIMITED, a.get(), reserved.get(key(period, userId)).get(), 0));
+            long avail = a.get();
+            return Optional.of(new GatewayAccount(period, type, ownerId, GatewayQuotaMode.LIMITED,
+                    avail, reserved.get(key(period, ownerId)).get(), 0, avail, 0, null));
         }
 
         @Override
@@ -187,6 +197,27 @@ class UpstreamProxyMeteringTest {
             String k = key(a.period(), a.payerUserId());
             available.get(k).addAndGet(a.reservedTokens());
             reserved.get(k).addAndGet(-a.reservedTokens());
+        }
+
+        @Override
+        public GatewayAccount allocate(String operationId, String period, String toUserId, long amount, String actorUserId) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public GatewayAccount reclaim(String operationId, String period, String fromUserId, long amount, String actorUserId) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public void transfer(String operationId, String period, String fromUserId, String toUserId, long amount,
+                             String actorUserId) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public List<GatewayLedgerEntry> listLedger(String period, int limit) {
+            return List.of();
         }
     }
 }

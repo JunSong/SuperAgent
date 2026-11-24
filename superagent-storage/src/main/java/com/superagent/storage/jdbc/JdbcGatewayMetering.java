@@ -4,7 +4,10 @@ import com.superagent.core.gateway.GatewayAccount;
 import com.superagent.core.gateway.GatewayAccountType;
 import com.superagent.core.gateway.GatewayAttempt;
 import com.superagent.core.gateway.GatewayAttemptStatus;
+import com.superagent.core.gateway.GatewayConflictException;
+import com.superagent.core.gateway.GatewayLedgerEntry;
 import com.superagent.core.gateway.GatewayMetering;
+import com.superagent.core.gateway.GatewayQuotaExhaustedException;
 import com.superagent.core.gateway.GatewayQuotaInsufficientException;
 import com.superagent.core.gateway.GatewayQuotaMode;
 import org.springframework.dao.DuplicateKeyException;
@@ -13,13 +16,13 @@ import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
 /**
- * MySQL/H2 ledger for #34 PR-03: atomic reserve / beginSend / settle with F=0.
- * Tables: {@code gateway_account}, {@code gateway_attempt}, {@code gateway_ledger}.
+ * MySQL/H2 ledger for #34: reserve/beginSend/settle, float claim (PR-04), allocate/reclaim/transfer (PR-05).
  */
 public class JdbcGatewayMetering implements GatewayMetering {
 
@@ -33,6 +36,9 @@ public class JdbcGatewayMetering implements GatewayMetering {
               available_tokens  BIGINT       NOT NULL,
               reserved_tokens   BIGINT       NOT NULL,
               settled_tokens    BIGINT       NOT NULL,
+              base_quota        BIGINT       NOT NULL DEFAULT 0,
+              float_allowance   BIGINT       NOT NULL DEFAULT 0,
+              float_turn_id     VARCHAR(128) NULL,
               PRIMARY KEY (company_id, period, account_type, owner_id)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """;
@@ -70,9 +76,12 @@ public class JdbcGatewayMetering implements GatewayMetering {
               delta_settled   BIGINT     NOT NULL,
               reason        VARCHAR(64)  NOT NULL,
               attempt_id    VARCHAR(64)  NULL,
+              param_digest  VARCHAR(128) NULL,
               PRIMARY KEY (company_id, operation_id, entry_no)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """;
+
+    private static final String POOL_OWNER = "";
 
     private static final RowMapper<GatewayAccount> ACCOUNT = (rs, n) -> new GatewayAccount(
             rs.getString("period"),
@@ -81,7 +90,10 @@ public class JdbcGatewayMetering implements GatewayMetering {
             GatewayQuotaMode.valueOf(rs.getString("quota_mode")),
             rs.getLong("available_tokens"),
             rs.getLong("reserved_tokens"),
-            rs.getLong("settled_tokens"));
+            rs.getLong("settled_tokens"),
+            rs.getLong("base_quota"),
+            rs.getLong("float_allowance"),
+            blankToNull(rs.getString("float_turn_id")));
 
     private static final RowMapper<GatewayAttempt> ATTEMPT = (rs, n) -> new GatewayAttempt(
             rs.getString("id"),
@@ -97,6 +109,18 @@ public class JdbcGatewayMetering implements GatewayMetering {
             rs.getLong("actual_tokens"),
             GatewayAttemptStatus.valueOf(rs.getString("status")));
 
+    private static final RowMapper<GatewayLedgerEntry> LEDGER = (rs, n) -> new GatewayLedgerEntry(
+            rs.getString("operation_id"),
+            rs.getInt("entry_no"),
+            rs.getString("period"),
+            GatewayAccountType.valueOf(rs.getString("account_type")),
+            rs.getString("owner_id"),
+            rs.getLong("delta_available"),
+            rs.getLong("delta_reserved"),
+            rs.getLong("delta_settled"),
+            rs.getString("reason"),
+            rs.getString("attempt_id"));
+
     private final JdbcTemplate jdbc;
     private final TransactionTemplate tx;
 
@@ -107,36 +131,66 @@ public class JdbcGatewayMetering implements GatewayMetering {
         TenantSchema.create(jdbc, ACCOUNT_DDL);
         TenantSchema.create(jdbc, ATTEMPT_DDL);
         TenantSchema.create(jdbc, LEDGER_DDL);
+        ensureColumn("gateway_account", "base_quota", "BIGINT NOT NULL DEFAULT 0");
+        ensureColumn("gateway_account", "float_allowance", "BIGINT NOT NULL DEFAULT 0");
+        ensureColumn("gateway_account", "float_turn_id", "VARCHAR(128) NULL");
+        ensureColumn("gateway_ledger", "param_digest", "VARCHAR(128) NULL");
     }
 
     @Override
     public void putEmployee(String period, String userId, long available) {
-        if (period == null || period.isBlank() || userId == null || userId.isBlank()) {
-            throw new IllegalArgumentException("period and userId are required");
+        putEmployee(period, userId, available, 0, available, 0);
+    }
+
+    @Override
+    public void putEmployee(String period, String userId, long available, long settled, long baseQuota,
+                            long floatAllowance) {
+        requirePeriodUser(period, userId);
+        if (available < 0 || settled < 0 || baseQuota < 0 || floatAllowance < 0) {
+            throw new IllegalArgumentException("balances must be >= 0");
+        }
+        String company = TenantSchema.company();
+        jdbc.update("""
+                REPLACE INTO gateway_account (company_id, period, account_type, owner_id, quota_mode,
+                  available_tokens, reserved_tokens, settled_tokens, base_quota, float_allowance, float_turn_id)
+                VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, NULL)
+                """,
+                company, period, GatewayAccountType.EMPLOYEE.name(), userId,
+                GatewayQuotaMode.LIMITED.name(), available, settled, baseQuota, floatAllowance);
+    }
+
+    @Override
+    public void putPool(String period, GatewayAccountType type, long available) {
+        if (period == null || period.isBlank() || type == null || type == GatewayAccountType.EMPLOYEE) {
+            throw new IllegalArgumentException("period and non-employee type are required");
         }
         if (available < 0) {
             throw new IllegalArgumentException("available must be >= 0");
         }
-        String company = TenantSchema.company();
-        // REPLACE keeps H2 (MODE=MySQL) and MySQL aligned for upsert-by-primary-key.
         jdbc.update("""
                 REPLACE INTO gateway_account (company_id, period, account_type, owner_id, quota_mode,
-                  available_tokens, reserved_tokens, settled_tokens)
-                VALUES (?, ?, ?, ?, ?, ?, 0, 0)
+                  available_tokens, reserved_tokens, settled_tokens, base_quota, float_allowance, float_turn_id)
+                VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, 0, NULL)
                 """,
-                company, period, GatewayAccountType.EMPLOYEE.name(), userId,
-                GatewayQuotaMode.LIMITED.name(), available);
+                TenantSchema.company(), period, type.name(), POOL_OWNER, GatewayQuotaMode.LIMITED.name(),
+                available, available);
     }
 
     @Override
     public Optional<GatewayAccount> findEmployee(String period, String userId) {
+        return findAccount(period, GatewayAccountType.EMPLOYEE, userId);
+    }
+
+    @Override
+    public Optional<GatewayAccount> findAccount(String period, GatewayAccountType type, String ownerId) {
+        String owner = ownerId == null ? POOL_OWNER : ownerId;
         return jdbc.query("""
-                        SELECT period, account_type, owner_id, quota_mode, available_tokens, reserved_tokens, settled_tokens
+                        SELECT period, account_type, owner_id, quota_mode, available_tokens, reserved_tokens,
+                          settled_tokens, base_quota, float_allowance, float_turn_id
                         FROM gateway_account
                         WHERE company_id = ? AND period = ? AND account_type = ? AND owner_id = ?
                         """,
-                ACCOUNT, TenantSchema.company(), period, GatewayAccountType.EMPLOYEE.name(), userId)
-                .stream().findFirst();
+                ACCOUNT, TenantSchema.company(), period, type.name(), owner).stream().findFirst();
     }
 
     @Override
@@ -151,6 +205,56 @@ public class JdbcGatewayMetering implements GatewayMetering {
                 throw new IllegalStateException("UNLIMITED accounts do not reserve; skip metering at the caller");
             }
             long r = request.reservedTokens();
+            long used = account.settled() + account.reserved();
+            long b = account.baseQuota() > 0 ? account.baseQuota() : account.available() + account.reserved() + account.settled();
+            long f = account.floatAllowance();
+            String floatTurn = account.floatTurnId();
+            boolean isFloatTurn = floatTurn != null && floatTurn.equals(request.turnId());
+
+            if (used >= b && !isFloatTurn) {
+                if (f > 0 && floatTurn == null && used + r > b) {
+                    // fall through to claim below
+                } else if (used >= b) {
+                    throw new GatewayQuotaExhaustedException(
+                            "本月基础额度已用尽（QUOTA_EXHAUSTED）");
+                }
+            }
+
+            if (used + r > b) {
+                if (floatTurn == null) {
+                    if (f <= 0) {
+                        throw new GatewayQuotaInsufficientException(
+                                "可用额度不足：需要预占 " + r + " tokens（QUOTA_INSUFFICIENT）");
+                    }
+                    int claimed = jdbc.update("""
+                            UPDATE gateway_account
+                            SET float_turn_id = ?, available_tokens = available_tokens + ?
+                            WHERE company_id = ? AND period = ? AND account_type = ? AND owner_id = ?
+                              AND (float_turn_id IS NULL OR float_turn_id = '')
+                            """,
+                            request.turnId(), f, company, request.period(),
+                            GatewayAccountType.EMPLOYEE.name(), request.payerUserId());
+                    if (claimed == 0) {
+                        throw new GatewayQuotaExhaustedException(
+                                "上浮资格已被其他轮次占用（QUOTA_EXHAUSTED）");
+                    }
+                    writeLedger(company, "float-claim:" + request.turnId(), 1, request.period(),
+                            request.payerUserId(), f, 0, 0, "FLOAT_CLAIM", null, digest("float", request.turnId(), f));
+                    isFloatTurn = true;
+                    // pull F from FLOAT_POOL when present
+                    debitPoolIfPresent(company, request.period(), GatewayAccountType.FLOAT_POOL, f);
+                } else if (!isFloatTurn) {
+                    throw new GatewayQuotaExhaustedException(
+                            "本月基础额度已用尽且上浮属于其他轮次（QUOTA_EXHAUSTED）");
+                }
+            }
+
+            long cap = b + (isFloatTurn ? f : 0);
+            if (used + r > cap) {
+                throw new GatewayQuotaInsufficientException(
+                        "可用额度不足：需要预占 " + r + " tokens（QUOTA_INSUFFICIENT）");
+            }
+
             int updated = jdbc.update("""
                     UPDATE gateway_account
                     SET available_tokens = available_tokens - ?, reserved_tokens = reserved_tokens + ?
@@ -178,7 +282,7 @@ public class JdbcGatewayMetering implements GatewayMetering {
                 throw new IllegalStateException("duplicate gateway request_id: " + request.requestId(), e);
             }
             writeLedger(company, "reserve:" + attemptId, 1, request.period(), request.payerUserId(),
-                    -r, r, 0, "RESERVE", attemptId);
+                    -r, r, 0, "RESERVE", attemptId, null);
             return requireAttempt(company, attemptId);
         });
     }
@@ -188,15 +292,12 @@ public class JdbcGatewayMetering implements GatewayMetering {
         if (attemptId == null || attemptId.isBlank()) {
             return false;
         }
-        Boolean ok = tx.execute(status -> {
-            int n = jdbc.update("""
-                    UPDATE gateway_attempt SET status = ?
-                    WHERE company_id = ? AND id = ? AND status = ?
-                    """,
-                    GatewayAttemptStatus.SENDING.name(), TenantSchema.company(), attemptId,
-                    GatewayAttemptStatus.RESERVED.name());
-            return n == 1;
-        });
+        Boolean ok = tx.execute(status -> jdbc.update("""
+                UPDATE gateway_attempt SET status = ?
+                WHERE company_id = ? AND id = ? AND status = ?
+                """,
+                GatewayAttemptStatus.SENDING.name(), TenantSchema.company(), attemptId,
+                GatewayAttemptStatus.RESERVED.name()) == 1);
         return Boolean.TRUE.equals(ok);
     }
 
@@ -212,7 +313,6 @@ public class JdbcGatewayMetering implements GatewayMetering {
             String company = TenantSchema.company();
             GatewayAttempt current = requireAttempt(company, attemptId);
             if (current.status() == GatewayAttemptStatus.SETTLED) {
-                // Idempotent replay: same A succeeds; different A is a conflict.
                 if (current.actualTokens() == actualTokens) {
                     return current;
                 }
@@ -224,7 +324,7 @@ public class JdbcGatewayMetering implements GatewayMetering {
                 throw new IllegalStateException("cannot settle attempt in status " + current.status());
             }
             long r = current.reservedTokens();
-            long a = Math.min(actualTokens, r); // PR-03: A>R kept for later recon; settle within R
+            long a = Math.min(actualTokens, r);
             long refund = r - a;
             int moved = jdbc.update("""
                     UPDATE gateway_account
@@ -245,7 +345,7 @@ public class JdbcGatewayMetering implements GatewayMetering {
                     """,
                     GatewayAttemptStatus.SETTLED.name(), a, company, attemptId);
             writeLedger(company, "settle:" + attemptId, 1, current.period(), current.payerUserId(),
-                    refund, -r, a, "SETTLE", attemptId);
+                    refund, -r, a, "SETTLE", attemptId, null);
             return requireAttempt(company, attemptId);
         });
     }
@@ -278,11 +378,8 @@ public class JdbcGatewayMetering implements GatewayMetering {
             String company = TenantSchema.company();
             GatewayAttempt current = findAttempt(company, attemptId).orElse(null);
             if (current == null || current.status() == GatewayAttemptStatus.CANCELLED
-                    || current.status() == GatewayAttemptStatus.SETTLED) {
-                return;
-            }
-            if (current.status() != GatewayAttemptStatus.RESERVED) {
-                // Already sending / pending: keep freeze for reconciliation.
+                    || current.status() == GatewayAttemptStatus.SETTLED
+                    || current.status() != GatewayAttemptStatus.RESERVED) {
                 return;
             }
             long r = current.reservedTokens();
@@ -301,19 +398,206 @@ public class JdbcGatewayMetering implements GatewayMetering {
                     GatewayAttemptStatus.CANCELLED.name(), company, attemptId,
                     GatewayAttemptStatus.RESERVED.name());
             writeLedger(company, "cancel:" + attemptId, 1, current.period(), current.payerUserId(),
-                    r, -r, 0, "CANCEL", attemptId);
+                    r, -r, 0, "CANCEL", attemptId, null);
         });
     }
 
+    @Override
+    public GatewayAccount allocate(String operationId, String period, String toUserId, long amount, String actorUserId) {
+        requireOp(operationId, period, toUserId, amount);
+        return tx.execute(status -> {
+            String digest = digest("allocate", toUserId, amount);
+            if (replayOrConflict(operationId, digest)) {
+                return findEmployee(period, toUserId).orElseThrow();
+            }
+            String company = TenantSchema.company();
+            ensureEmployeeRow(company, period, toUserId);
+            debitPool(company, period, GatewayAccountType.UNALLOCATED, amount);
+            jdbc.update("""
+                    UPDATE gateway_account
+                    SET available_tokens = available_tokens + ?, base_quota = base_quota + ?
+                    WHERE company_id = ? AND period = ? AND account_type = ? AND owner_id = ?
+                    """,
+                    amount, amount, company, period, GatewayAccountType.EMPLOYEE.name(), toUserId);
+            writeLedger(company, operationId, 1, period, POOL_OWNER, -amount, 0, 0, "ALLOCATE_OUT", null, digest);
+            writeLedger(company, operationId, 2, period, toUserId, amount, 0, 0, "ALLOCATE_IN", null, digest);
+            return findEmployee(period, toUserId).orElseThrow();
+        });
+    }
+
+    @Override
+    public GatewayAccount reclaim(String operationId, String period, String fromUserId, long amount, String actorUserId) {
+        requireOp(operationId, period, fromUserId, amount);
+        return tx.execute(status -> {
+            String digest = digest("reclaim", fromUserId, amount);
+            if (replayOrConflict(operationId, digest)) {
+                return findEmployee(period, fromUserId).orElseThrow();
+            }
+            String company = TenantSchema.company();
+            int n = jdbc.update("""
+                    UPDATE gateway_account
+                    SET available_tokens = available_tokens - ?, base_quota = GREATEST(0, base_quota - ?)
+                    WHERE company_id = ? AND period = ? AND account_type = ? AND owner_id = ?
+                      AND available_tokens >= ?
+                    """,
+                    amount, amount, company, period, GatewayAccountType.EMPLOYEE.name(), fromUserId, amount);
+            if (n == 0) {
+                throw new GatewayQuotaInsufficientException("可回收余额不足");
+            }
+            ensurePoolRow(company, period, GatewayAccountType.UNALLOCATED);
+            jdbc.update("""
+                    UPDATE gateway_account SET available_tokens = available_tokens + ?
+                    WHERE company_id = ? AND period = ? AND account_type = ? AND owner_id = ?
+                    """,
+                    amount, company, period, GatewayAccountType.UNALLOCATED.name(), POOL_OWNER);
+            writeLedger(company, operationId, 1, period, fromUserId, -amount, 0, 0, "RECLAIM_OUT", null, digest);
+            writeLedger(company, operationId, 2, period, POOL_OWNER, amount, 0, 0, "RECLAIM_IN", null, digest);
+            return findEmployee(period, fromUserId).orElseThrow();
+        });
+    }
+
+    @Override
+    public void transfer(String operationId, String period, String fromUserId, String toUserId, long amount,
+                         String actorUserId) {
+        requireOp(operationId, period, fromUserId, amount);
+        if (toUserId == null || toUserId.isBlank() || toUserId.equals(fromUserId)) {
+            throw new IllegalArgumentException("toUserId must be another employee");
+        }
+        tx.executeWithoutResult(status -> {
+            String digest = digest("transfer", fromUserId + ">" + toUserId, amount);
+            if (replayOrConflict(operationId, digest)) {
+                return;
+            }
+            String company = TenantSchema.company();
+            ensureEmployeeRow(company, period, toUserId);
+            int n = jdbc.update("""
+                    UPDATE gateway_account SET available_tokens = available_tokens - ?,
+                      base_quota = GREATEST(0, base_quota - ?)
+                    WHERE company_id = ? AND period = ? AND account_type = ? AND owner_id = ?
+                      AND available_tokens >= ?
+                    """,
+                    amount, amount, company, period, GatewayAccountType.EMPLOYEE.name(), fromUserId, amount);
+            if (n == 0) {
+                throw new GatewayQuotaInsufficientException("可用余额不足，无法转账");
+            }
+            jdbc.update("""
+                    UPDATE gateway_account SET available_tokens = available_tokens + ?,
+                      base_quota = base_quota + ?
+                    WHERE company_id = ? AND period = ? AND account_type = ? AND owner_id = ?
+                    """,
+                    amount, amount, company, period, GatewayAccountType.EMPLOYEE.name(), toUserId);
+            writeLedger(company, operationId, 1, period, fromUserId, -amount, 0, 0, "TRANSFER_OUT", null, digest);
+            writeLedger(company, operationId, 2, period, toUserId, amount, 0, 0, "TRANSFER_IN", null, digest);
+        });
+    }
+
+    @Override
+    public List<GatewayLedgerEntry> listLedger(String period, int limit) {
+        int n = Math.min(Math.max(limit, 1), 500);
+        return jdbc.query("""
+                        SELECT operation_id, entry_no, period, account_type, owner_id,
+                          delta_available, delta_reserved, delta_settled, reason, attempt_id
+                        FROM gateway_ledger
+                        WHERE company_id = ? AND period = ?
+                        ORDER BY operation_id DESC, entry_no ASC
+                        LIMIT ?
+                        """,
+                LEDGER, TenantSchema.company(), period, n);
+    }
+
+    private void debitPoolIfPresent(String company, String period, GatewayAccountType type, long amount) {
+        Optional<GatewayAccount> pool = findAccount(period, type, POOL_OWNER);
+        if (pool.isEmpty()) {
+            return;
+        }
+        int n = jdbc.update("""
+                UPDATE gateway_account SET available_tokens = available_tokens - ?
+                WHERE company_id = ? AND period = ? AND account_type = ? AND owner_id = ?
+                  AND available_tokens >= ?
+                """,
+                amount, company, period, type.name(), POOL_OWNER, amount);
+        if (n == 0) {
+            throw new GatewayQuotaInsufficientException("公司上浮池余额不足");
+        }
+    }
+
+    private void debitPool(String company, String period, GatewayAccountType type, long amount) {
+        ensurePoolRow(company, period, type);
+        int n = jdbc.update("""
+                UPDATE gateway_account SET available_tokens = available_tokens - ?
+                WHERE company_id = ? AND period = ? AND account_type = ? AND owner_id = ?
+                  AND available_tokens >= ?
+                """,
+                amount, company, period, type.name(), POOL_OWNER, amount);
+        if (n == 0) {
+            throw new GatewayQuotaInsufficientException("未分配池余额不足");
+        }
+    }
+
+    private void ensurePoolRow(String company, String period, GatewayAccountType type) {
+        jdbc.update("""
+                INSERT INTO gateway_account (company_id, period, account_type, owner_id, quota_mode,
+                  available_tokens, reserved_tokens, settled_tokens, base_quota, float_allowance, float_turn_id)
+                SELECT ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, NULL
+                WHERE NOT EXISTS (
+                  SELECT 1 FROM gateway_account WHERE company_id = ? AND period = ? AND account_type = ? AND owner_id = ?)
+                """,
+                company, period, type.name(), POOL_OWNER, GatewayQuotaMode.LIMITED.name(),
+                company, period, type.name(), POOL_OWNER);
+    }
+
+    private void ensureEmployeeRow(String company, String period, String userId) {
+        jdbc.update("""
+                INSERT INTO gateway_account (company_id, period, account_type, owner_id, quota_mode,
+                  available_tokens, reserved_tokens, settled_tokens, base_quota, float_allowance, float_turn_id)
+                SELECT ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, NULL
+                WHERE NOT EXISTS (
+                  SELECT 1 FROM gateway_account WHERE company_id = ? AND period = ? AND account_type = ? AND owner_id = ?)
+                """,
+                company, period, GatewayAccountType.EMPLOYEE.name(), userId, GatewayQuotaMode.LIMITED.name(),
+                company, period, GatewayAccountType.EMPLOYEE.name(), userId);
+    }
+
+    /** @return true if this operation_id already completed with the same digest (idempotent replay). */
+    private boolean replayOrConflict(String operationId, String digest) {
+        List<String> existing = jdbc.query("""
+                        SELECT param_digest FROM gateway_ledger
+                        WHERE company_id = ? AND operation_id = ? AND entry_no = 1
+                        """,
+                (rs, n) -> rs.getString("param_digest"), TenantSchema.company(), operationId);
+        if (existing.isEmpty()) {
+            return false;
+        }
+        String prev = existing.getFirst();
+        if (Objects.equals(prev, digest)) {
+            return true;
+        }
+        throw new GatewayConflictException("operation_id 已使用且参数不同");
+    }
+
     private void writeLedger(String company, String operationId, int entryNo, String period, String ownerId,
-                             long dAvailable, long dReserved, long dSettled, String reason, String attemptId) {
+                             long dAvailable, long dReserved, long dSettled, String reason, String attemptId,
+                             String paramDigest) {
         jdbc.update("""
                 INSERT INTO gateway_ledger (company_id, operation_id, entry_no, period, account_type, owner_id,
-                  delta_available, delta_reserved, delta_settled, reason, attempt_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  delta_available, delta_reserved, delta_settled, reason, attempt_id, param_digest)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                company, operationId, entryNo, period, GatewayAccountType.EMPLOYEE.name(), ownerId,
-                dAvailable, dReserved, dSettled, reason, attemptId);
+                company, operationId, entryNo, period,
+                ownerId == null || ownerId.isEmpty() ? GatewayAccountType.UNALLOCATED.name()
+                        : GatewayAccountType.EMPLOYEE.name(),
+                ownerId == null ? POOL_OWNER : ownerId,
+                dAvailable, dReserved, dSettled, reason, attemptId, paramDigest);
+    }
+
+    private void ensureColumn(String table, String column, String type) {
+        Integer present = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM information_schema.columns "
+                        + "WHERE LOWER(table_name) = LOWER(?) AND LOWER(column_name) = LOWER(?)",
+                Integer.class, table, column);
+        if (present == null || present == 0) {
+            jdbc.execute("ALTER TABLE " + table + " ADD COLUMN " + column + " " + type);
+        }
     }
 
     private GatewayAttempt requireAttempt(String company, String attemptId) {
@@ -347,7 +631,31 @@ public class JdbcGatewayMetering implements GatewayMetering {
         }
     }
 
+    private static void requirePeriodUser(String period, String userId) {
+        if (period == null || period.isBlank() || userId == null || userId.isBlank()) {
+            throw new IllegalArgumentException("period and userId are required");
+        }
+    }
+
+    private static void requireOp(String operationId, String period, String userId, long amount) {
+        if (operationId == null || operationId.isBlank()) {
+            throw new IllegalArgumentException("operationId is required");
+        }
+        requirePeriodUser(period, userId);
+        if (amount <= 0) {
+            throw new IllegalArgumentException("amount must be > 0");
+        }
+    }
+
+    private static String digest(String kind, String subject, long amount) {
+        return kind + "|" + subject + "|" + amount;
+    }
+
     private static String nullToEmpty(String s) {
         return s == null ? "" : s;
+    }
+
+    private static String blankToNull(String s) {
+        return s == null || s.isBlank() ? null : s;
     }
 }

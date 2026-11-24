@@ -1,44 +1,65 @@
 package com.superagent.core.gateway;
 
+import java.util.List;
 import java.util.Optional;
 
 /**
- * Transactional token ledger for managed model calls (#34 PR-03): reserve → beginSend → settle.
+ * Transactional token ledger for managed model calls (#34): reserve → beginSend → settle,
+ * with per-turn float (PR-04) and company budget ops (PR-05).
  * Every method is for the current {@link com.superagent.core.tenant.TenantContext} company.
- * Float (F) is not used here (F=0).
  */
 public interface GatewayMetering {
 
-    /**
-     * Creates or replaces a LIMITED employee account for the period with the given available balance
-     * (admin / tests / future allocation API). Reserved and settled start at 0 when creating fresh.
-     */
+    /** LIMITED employee with available=baseQuota and F=0 (PR-03 style). */
     void putEmployee(String period, String userId, long available);
+
+    /**
+     * LIMITED employee for float tests / admin seeds.
+     *
+     * @param available      spendable now
+     * @param settled        already spent (counts toward B)
+     * @param baseQuota      B
+     * @param floatAllowance F (0 disables float)
+     */
+    void putEmployee(String period, String userId, long available, long settled, long baseQuota, long floatAllowance);
+
+    /** Company pool (UNALLOCATED / FLOAT_POOL / RECON_RESERVE / SYSTEM). Owner is empty for company pools. */
+    void putPool(String period, GatewayAccountType type, long available);
 
     Optional<GatewayAccount> findEmployee(String period, String userId);
 
+    Optional<GatewayAccount> findAccount(String period, GatewayAccountType type, String ownerId);
+
     /**
-     * Freezes {@code reservedTokens} on the payer's LIMITED employee account for this period.
-     * No-op path: callers that see empty {@link #findEmployee} treat the tenant as legacy/unlimited.
+     * Freezes {@code reservedTokens}. May atomically claim float for {@code turnId} when crossing B.
      *
-     * @throws GatewayQuotaInsufficientException when available &lt; reservedTokens
+     * @throws GatewayQuotaExhaustedException when used ≥ B and this turn did not claim float
+     * @throws GatewayQuotaInsufficientException when the effective cap or available cannot cover R
      */
     GatewayAttempt reserve(ReserveRequest request);
 
-    /** Conditional {@code RESERVED → SENDING}. Returns false when the attempt is gone or already moved. */
     boolean beginSend(String attemptId);
 
-    /**
-     * Settles with actual usage A: credits {@code reserved − A} back to available (A may not exceed R in PR-03;
-     * A &gt; R is recorded as pending for later reconciliation). Idempotent for the same attempt id and A.
-     */
     GatewayAttempt settle(String attemptId, long actualTokens);
 
-    /** Keeps the freeze and marks the attempt pending when final usage is unknown. */
     GatewayAttempt markPending(String attemptId);
 
-    /** Releases a not-yet-sent reservation (cancel before upstream). */
     void cancel(String attemptId);
+
+    /**
+     * Admin: move {@code amount} from UNALLOCATED → employee available (increases B).
+     * Idempotent on {@code operationId} with the same parameters.
+     */
+    GatewayAccount allocate(String operationId, String period, String toUserId, long amount, String actorUserId);
+
+    /** Admin: move {@code amount} from employee available → UNALLOCATED (decreases B). */
+    GatewayAccount reclaim(String operationId, String period, String fromUserId, long amount, String actorUserId);
+
+    /** Same-company employee transfer of available tokens. */
+    void transfer(String operationId, String period, String fromUserId, String toUserId, long amount, String actorUserId);
+
+    /** Recent ledger lines for the company (audit). */
+    List<GatewayLedgerEntry> listLedger(String period, int limit);
 
     record ReserveRequest(
             String requestId,

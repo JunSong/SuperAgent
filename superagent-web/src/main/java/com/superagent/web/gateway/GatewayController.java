@@ -3,6 +3,7 @@ package com.superagent.web.gateway;
 import com.superagent.api.ApiPaths;
 import com.superagent.core.error.BusyException;
 import com.superagent.core.error.ForbiddenException;
+import com.superagent.core.gateway.GatewayQuotaExhaustedException;
 import com.superagent.core.gateway.GatewayQuotaInsufficientException;
 import com.superagent.gateway.ModelRunGrant;
 import com.superagent.gateway.ModelRunGrants;
@@ -96,8 +97,8 @@ public class GatewayController {
             if (!response.isCommitted()) {
                 response.sendError(HttpServletResponse.SC_BAD_GATEWAY, "upstream interrupted");
             }
-        } catch (GatewayQuotaInsufficientException e) {
-            // #34: QUOTA_INSUFFICIENT — balance cannot cover R; 0 outbound.
+        } catch (GatewayQuotaInsufficientException | GatewayQuotaExhaustedException e) {
+            // #34: QUOTA_* — no outbound.
             if (!response.isCommitted()) {
                 response.sendError(HttpServletResponse.SC_FORBIDDEN, e.getMessage());
             }
