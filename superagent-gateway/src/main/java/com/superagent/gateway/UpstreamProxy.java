@@ -2,11 +2,16 @@ package com.superagent.gateway;
 
 import com.superagent.core.chat.RunCredential;
 import com.superagent.core.error.ForbiddenException;
+import com.superagent.core.gateway.GatewayAttempt;
+import com.superagent.core.gateway.GatewayMetering;
+import com.superagent.core.gateway.GatewayPeriods;
+import com.superagent.core.gateway.GatewayQuotaMode;
 import com.superagent.core.provider.ProviderCatalog;
 import com.superagent.core.tenant.TenantContext;
 import com.superagent.platform.provider.CredentialService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -16,13 +21,16 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Clock;
 import java.time.Duration;
 import java.util.Locale;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * Forwards a model HTTP call to the company upstream with the real Key swapped in.
- * Streams the response body; never buffers the whole reply.
+ * Streams the response body; never buffers the whole reply. When {@link GatewayMetering} is present
+ * and the payer has a LIMITED account, reserves tokens before the upstream call (#34 PR-03).
  */
 @Component
 public class UpstreamProxy {
@@ -34,15 +42,27 @@ public class UpstreamProxy {
 
     private final CredentialService credentials;
     private final HttpClient http;
+    private final Clock clock;
+    private GatewayMetering metering; // null in tests / legacy: no ledger
 
     public UpstreamProxy(CredentialService credentials) {
-        this(credentials, HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(30)).build());
+        this(credentials, HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(30)).build(), Clock.systemUTC());
     }
 
     /** Tests inject a client pointed at a local stub. */
     public UpstreamProxy(CredentialService credentials, HttpClient http) {
+        this(credentials, http, Clock.systemUTC());
+    }
+
+    public UpstreamProxy(CredentialService credentials, HttpClient http, Clock clock) {
         this.credentials = credentials;
         this.http = http;
+        this.clock = clock;
+    }
+
+    @Autowired(required = false)
+    void setMetering(GatewayMetering metering) {
+        this.metering = metering;
     }
 
     /**
@@ -64,10 +84,17 @@ public class UpstreamProxy {
             java.util.function.IntConsumer onResponseHeaders) throws IOException, InterruptedException {
         try {
             return TenantContext.call(grant.companyId(), () -> {
+                GatewayAttempt attempt = null;
+                boolean sending = false;
                 try {
+                    attempt = openAttempt(grant, body);
+
                     CredentialService.Choice choice = credentials.current(grant.cli());
                     RunCredential cred = choice.credential();
                     if (cred == null || cred.apiKey() == null || cred.apiKey().isBlank()) {
+                        if (attempt != null) {
+                            metering.cancel(attempt.id());
+                        }
                         throw new ForbiddenException("本公司还没有配置 " + grant.cli() + " 的 API Key");
                     }
                     String upstreamBase = resolveUpstreamBase(grant.cli(), cred.baseUrl());
@@ -80,6 +107,14 @@ public class UpstreamProxy {
                     log.debug("gateway forward company={} cli={} run={} → {}", grant.companyId(), grant.cli(),
                             grant.runId(), redact(target));
 
+                    if (attempt != null) {
+                        if (!metering.beginSend(attempt.id())) {
+                            metering.cancel(attempt.id());
+                            throw new ForbiddenException("无法取得发送权：预占已失效");
+                        }
+                        sending = true;
+                    }
+
                     HttpResponse<InputStream> resp = http.send(req.build(), HttpResponse.BodyHandlers.ofInputStream());
                     if (onResponseHeaders != null) {
                         onResponseHeaders.accept(resp.statusCode());
@@ -88,12 +123,39 @@ public class UpstreamProxy {
                         in.transferTo(out);
                         out.flush();
                     }
+                    // Streaming path does not yet parse vendor usage; keep the freeze as pending (#34).
+                    if (attempt != null) {
+                        metering.markPending(attempt.id());
+                    }
                     return resp.statusCode();
                 } catch (IOException e) {
+                    if (attempt != null) {
+                        if (sending) {
+                            metering.markPending(attempt.id());
+                        } else {
+                            metering.cancel(attempt.id());
+                        }
+                    }
                     throw new java.io.UncheckedIOException(e);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
+                    if (attempt != null) {
+                        if (sending) {
+                            metering.markPending(attempt.id());
+                        } else {
+                            metering.cancel(attempt.id());
+                        }
+                    }
                     throw new IllegalStateException("upstream interrupted", e);
+                } catch (RuntimeException e) {
+                    if (attempt != null && !sending) {
+                        try {
+                            metering.cancel(attempt.id());
+                        } catch (RuntimeException ignored) {
+                            // keep freeze
+                        }
+                    }
+                    throw e;
                 }
             });
         } catch (java.io.UncheckedIOException e) {
@@ -104,6 +166,27 @@ public class UpstreamProxy {
             }
             throw e;
         }
+    }
+
+    private GatewayAttempt openAttempt(ModelRunGrant grant, byte[] body) {
+        if (metering == null) {
+            return null;
+        }
+        String period = GatewayPeriods.current(clock);
+        var account = metering.findEmployee(period, grant.payerUserId());
+        if (account.isEmpty() || account.get().quotaMode() == GatewayQuotaMode.UNLIMITED) {
+            return null; // legacy / unlimited: no ledger gate
+        }
+        long r = ReservationEstimator.estimate(body);
+        return metering.reserve(new GatewayMetering.ReserveRequest(
+                UUID.randomUUID().toString(),
+                grant.turnId(),
+                grant.runId(),
+                grant.payerUserId(),
+                grant.cli(),
+                grant.model(),
+                period,
+                r));
     }
 
     static String resolveUpstreamBase(String cli, String credentialBaseUrl) {

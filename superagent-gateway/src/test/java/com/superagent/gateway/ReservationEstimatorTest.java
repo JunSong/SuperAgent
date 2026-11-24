@@ -1,0 +1,23 @@
+package com.superagent.gateway;
+
+import org.junit.jupiter.api.Test;
+
+import java.nio.charset.StandardCharsets;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+class ReservationEstimatorTest {
+
+    @Test
+    void usesBodyBytesAndMaxTokens() {
+        byte[] body = "{\"model\":\"x\",\"max_tokens\":100,\"messages\":[]}".getBytes(StandardCharsets.UTF_8);
+        long r = ReservationEstimator.estimate(body);
+        assertThat(r).isEqualTo((body.length + 3) / 4 + 256); // output floor wins over 100
+    }
+
+    @Test
+    void respectsLargerOutputCap() {
+        byte[] body = "{\"max_output_tokens\":1000}".getBytes(StandardCharsets.UTF_8);
+        assertThat(ReservationEstimator.estimate(body)).isEqualTo((body.length + 3) / 4 + 1000);
+    }
+}

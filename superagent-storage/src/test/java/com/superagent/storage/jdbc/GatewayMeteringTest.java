@@ -1,0 +1,92 @@
+package com.superagent.storage.jdbc;
+
+import com.superagent.core.gateway.GatewayAttempt;
+import com.superagent.core.gateway.GatewayAttemptStatus;
+import com.superagent.core.gateway.GatewayMetering;
+import com.superagent.core.gateway.GatewayQuotaInsufficientException;
+import com.superagent.core.tenant.TenantContext;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+
+import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+/**
+ * PR-03 acceptance (#34): balance 100, first freezes 60 → second R=60 rejected;
+ * settle A=35 → available 65; replay settle ten times still 65.
+ */
+@ExtendWith(InCompany.class)
+class GatewayMeteringTest {
+
+    @Test
+    void reserveBlocksSecondWhenBalanceHeldThenSettleIsIdempotent() {
+        JdbcGatewayMetering ledger = newLedger();
+        String period = "2026-11";
+        ledger.putEmployee(period, "alice", 100);
+
+        GatewayAttempt first = ledger.reserve(new GatewayMetering.ReserveRequest(
+                "req-1", "turn-1", "run-1", "alice", "deepseek", "deepseek-chat", period, 60));
+        assertThat(first.status()).isEqualTo(GatewayAttemptStatus.RESERVED);
+        assertThat(ledger.findEmployee(period, "alice")).hasValueSatisfying(a -> {
+            assertThat(a.available()).isEqualTo(40);
+            assertThat(a.reserved()).isEqualTo(60);
+            assertThat(a.settled()).isZero();
+        });
+
+        assertThatThrownBy(() -> ledger.reserve(new GatewayMetering.ReserveRequest(
+                "req-2", "turn-2", "run-2", "alice", "deepseek", "deepseek-chat", period, 60)))
+                .isInstanceOf(GatewayQuotaInsufficientException.class)
+                .hasMessageContaining("QUOTA_INSUFFICIENT");
+
+        assertThat(ledger.beginSend(first.id())).isTrue();
+        GatewayAttempt settled = ledger.settle(first.id(), 35);
+        assertThat(settled.status()).isEqualTo(GatewayAttemptStatus.SETTLED);
+        assertThat(settled.actualTokens()).isEqualTo(35);
+        assertThat(ledger.findEmployee(period, "alice")).hasValueSatisfying(a -> {
+            assertThat(a.available()).isEqualTo(65);
+            assertThat(a.reserved()).isZero();
+            assertThat(a.settled()).isEqualTo(35);
+        });
+
+        for (int i = 0; i < 10; i++) {
+            GatewayAttempt again = ledger.settle(first.id(), 35);
+            assertThat(again.actualTokens()).isEqualTo(35);
+            assertThat(again.status()).isEqualTo(GatewayAttemptStatus.SETTLED);
+        }
+        assertThat(ledger.findEmployee(period, "alice")).hasValueSatisfying(a -> {
+            assertThat(a.available()).isEqualTo(65);
+            assertThat(a.reserved()).isZero();
+            assertThat(a.settled()).isEqualTo(35);
+        });
+    }
+
+    @Test
+    void cancelReleasesReservedBeforeSend() {
+        JdbcGatewayMetering ledger = newLedger();
+        ledger.putEmployee("2026-11", "bob", 50);
+        GatewayAttempt a = ledger.reserve(new GatewayMetering.ReserveRequest(
+                "req-c", "t", "r", "bob", "deepseek", "m", "2026-11", 20));
+        ledger.cancel(a.id());
+        assertThat(ledger.findEmployee("2026-11", "bob")).hasValueSatisfying(acc -> {
+            assertThat(acc.available()).isEqualTo(50);
+            assertThat(acc.reserved()).isZero();
+        });
+    }
+
+    @Test
+    void otherCompanySeesNone() {
+        JdbcGatewayMetering ledger = newLedger();
+        ledger.putEmployee("2026-11", "alice", 100);
+        TenantContext.run(InCompany.OTHER, () ->
+                assertThat(ledger.findEmployee("2026-11", "alice")).isEmpty());
+    }
+
+    private static JdbcGatewayMetering newLedger() {
+        return new JdbcGatewayMetering(new JdbcTemplate(new DriverManagerDataSource(
+                "jdbc:h2:mem:gw-meter-" + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "")));
+    }
+}

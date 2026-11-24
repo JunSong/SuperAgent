@@ -1,6 +1,9 @@
 package com.superagent.web.gateway;
 
 import com.superagent.api.ApiPaths;
+import com.superagent.core.error.BusyException;
+import com.superagent.core.error.ForbiddenException;
+import com.superagent.core.gateway.GatewayQuotaInsufficientException;
 import com.superagent.gateway.ModelRunGrant;
 import com.superagent.gateway.ModelRunGrants;
 import com.superagent.gateway.UpstreamProxy;
@@ -92,6 +95,19 @@ public class GatewayController {
             Thread.currentThread().interrupt();
             if (!response.isCommitted()) {
                 response.sendError(HttpServletResponse.SC_BAD_GATEWAY, "upstream interrupted");
+            }
+        } catch (GatewayQuotaInsufficientException e) {
+            // #34: QUOTA_INSUFFICIENT — balance cannot cover R; 0 outbound.
+            if (!response.isCommitted()) {
+                response.sendError(HttpServletResponse.SC_FORBIDDEN, e.getMessage());
+            }
+        } catch (BusyException e) {
+            if (!response.isCommitted()) {
+                response.sendError(HttpServletResponse.SC_CONFLICT, e.getMessage());
+            }
+        } catch (ForbiddenException e) {
+            if (!response.isCommitted()) {
+                response.sendError(HttpServletResponse.SC_FORBIDDEN, e.getMessage());
             }
         } catch (RuntimeException | IOException e) {
             log.warn("gateway forward failed run={}: {}", grant.runId(), e.getMessage());
