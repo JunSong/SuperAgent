@@ -119,14 +119,21 @@ public class UpstreamProxy {
                     if (onResponseHeaders != null) {
                         onResponseHeaders.accept(resp.statusCode());
                     }
+                    StreamingUsageProbe usageProbe = new StreamingUsageProbe();
                     try (InputStream in = resp.body()) {
-                        in.transferTo(out);
+                        byte[] buf = new byte[8192];
+                        int n;
+                        while ((n = in.read(buf)) >= 0) {
+                            if (n == 0) {
+                                continue;
+                            }
+                            out.write(buf, 0, n);
+                            usageProbe.accept(buf, 0, n);
+                        }
                         out.flush();
                     }
-                    // Streaming path does not yet parse vendor usage; keep the freeze as pending (#34).
-                    if (attempt != null) {
-                        metering.markPending(attempt.id());
-                    }
+                    usageProbe.finish();
+                    settleOrPending(attempt, usageProbe);
                     return resp.statusCode();
                 } catch (IOException e) {
                     if (attempt != null) {
@@ -187,6 +194,19 @@ public class UpstreamProxy {
                 grant.model(),
                 period,
                 r));
+    }
+
+    /** Prefer settle(A) when usage is present; otherwise keep the freeze as pending (#34). */
+    private void settleOrPending(GatewayAttempt attempt, StreamingUsageProbe usageProbe) {
+        if (attempt == null || metering == null) {
+            return;
+        }
+        var total = usageProbe.total();
+        if (total.isPresent()) {
+            metering.settle(attempt.id(), total.getAsLong());
+        } else {
+            metering.markPending(attempt.id());
+        }
     }
 
     static String resolveUpstreamBase(String cli, String credentialBaseUrl) {
