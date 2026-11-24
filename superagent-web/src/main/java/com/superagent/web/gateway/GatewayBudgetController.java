@@ -75,6 +75,25 @@ public class GatewayBudgetController {
         return ApiResponse.ok(null);
     }
 
+    @GetMapping(ApiPaths.GATEWAY_ADMIN + "/pools")
+    public ApiResponse<GatewayBudgetDtos.Balance> getPool(
+            @RequestParam(defaultValue = "UNALLOCATED") String type,
+            @RequestParam(required = false) String period) {
+        GatewayAccountType t;
+        try {
+            t = GatewayAccountType.valueOf(type.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("unknown pool type: " + type);
+        }
+        if (t == GatewayAccountType.EMPLOYEE) {
+            throw new IllegalArgumentException("use /balances for employee accounts");
+        }
+        String p = periodOrCurrent(period);
+        GatewayAccount a = metering.findAccount(p, t, "")
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "池尚未注入：" + t.name()));
+        return ApiResponse.ok(toBalance(a));
+    }
+
     @PutMapping(ApiPaths.GATEWAY_ADMIN + "/pools")
     public ApiResponse<GatewayBudgetDtos.Balance> putPool(@RequestBody GatewayBudgetDtos.PutPoolRequest body) {
         if (body == null || body.type() == null) {
@@ -113,14 +132,22 @@ public class GatewayBudgetController {
                 metering.listLedger(p, limit).stream().map(GatewayBudgetController::toLine).toList()));
     }
 
+    /**
+     * Employee balances for the period. Omit {@code userId} for the full roster;
+     * with {@code userId}, returns that one account (404 if missing).
+     */
     @GetMapping(ApiPaths.GATEWAY_ADMIN + "/balances")
-    public ApiResponse<GatewayBudgetDtos.Balance> adminEmployeeBalance(
-            @RequestParam String userId,
+    public ApiResponse<GatewayBudgetDtos.BalancePage> adminBalances(
+            @RequestParam(required = false) String userId,
             @RequestParam(required = false) String period) {
         String p = periodOrCurrent(period);
-        GatewayAccount a = metering.findEmployee(p, userId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "未找到员工额度账户"));
-        return ApiResponse.ok(toBalance(a));
+        if (userId != null && !userId.isBlank()) {
+            GatewayAccount a = metering.findEmployee(p, userId)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "未找到员工额度账户"));
+            return ApiResponse.ok(new GatewayBudgetDtos.BalancePage(List.of(toBalance(a))));
+        }
+        return ApiResponse.ok(new GatewayBudgetDtos.BalancePage(
+                metering.listEmployees(p).stream().map(GatewayBudgetController::toBalance).toList()));
     }
 
     @GetMapping(ApiPaths.GATEWAY_ADMIN + "/attempts")

@@ -28,10 +28,10 @@ let modelDetailId = null;
 // back/forward restores the same view. Admin-only views fall back to the default
 // for non-admins. See initialView().
 const KNOWN_VIEWS = new Set(["todo", "chat", "files", "tasks", "messages", "projects", "skills", "automation", "connectors", "models",
-  "users", "settings", "integrations", "file-storage", "analytics", "usage", "company-usage", "model-prices", "proxy-confirm"]);
+  "users", "settings", "integrations", "file-storage", "analytics", "usage", "company-usage", "model-prices", "model-quota", "proxy-confirm"]);
 // The "Workspace" dropdown's pages, and the admin pages (shown with the admin sidebar).
 const WORKSPACE_VIEWS = new Set(["files", "skills", "projects", "connectors", "usage", "proxy-confirm"]);
-const ADMIN_VIEWS = new Set(["settings", "integrations", "file-storage", "analytics", "company-usage", "models", "model-prices", "users"]);
+const ADMIN_VIEWS = new Set(["settings", "integrations", "file-storage", "analytics", "company-usage", "models", "model-prices", "model-quota", "users"]);
 const DEFAULT_VIEW = "todo"; // the to-do list is home: the first thing to look at each day
 let isAdmin = false;
 
@@ -75,6 +75,7 @@ function setView(view) {
   const isUsers = view === "users";
   const isModels = view === "models";
   const isModelPrices = view === "model-prices";
+  const isModelQuota = view === "model-quota";
   const isSettings = view === "settings";
   const isIntegrations = view === "integrations";
   const isFileStorage = view === "file-storage";
@@ -100,14 +101,16 @@ function setView(view) {
   usersPane.hidden = !isUsers;
   modelsPane.hidden = !isModels;
   document.querySelector('[data-pane="model-prices"]').hidden = !isModelPrices;
+  document.querySelector('[data-pane="model-quota"]').hidden = !isModelQuota;
   settingsPane.hidden = !isSettings;
   integrationsPane.hidden = !isIntegrations;
   fileStoragePane.hidden = !isFileStorage;
   skPane.hidden = !isSkills;
   projPane.hidden = !isProjects;
   if (!isSkills && !skel.drawer.hidden) closeSkillDrawer();
-  placeholderPane.hidden = isChat || isConnectors || isTasks || isUsers || isModels || isModelPrices || isSettings || isIntegrations
-    || isFileStorage || isAutomation || isSkills || isProjects || isAnalytics || isTodo || isFiles || isUsage || isProxy;
+  placeholderPane.hidden = isChat || isConnectors || isTasks || isUsers || isModels || isModelPrices || isModelQuota
+    || isSettings || isIntegrations || isFileStorage || isAutomation || isSkills || isProjects || isAnalytics
+    || isTodo || isFiles || isUsage || isProxy;
   if (!placeholderPane.hidden) placeholderText.textContent = L(placeholderLabels[view] || "placeholder.default");
   if (isConnectors) loadConnectors();
   if (isUsers) loadUsers();
@@ -129,6 +132,7 @@ function setView(view) {
   if (enteredTasksFrom) setTimeout(() => { enteredTasksFrom = null; }, 0);
   if (isModels) { showModelList(); startModelPolling(); } else { stopModelPolling(); }
   if (isModelPrices) mpLoad();
+  if (isModelQuota) gqLoad();
 }
 
 // The admin sidebar folds down to a narrow strip (open by default); the choice is remembered on this browser.

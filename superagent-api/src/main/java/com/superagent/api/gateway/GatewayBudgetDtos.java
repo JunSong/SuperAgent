@@ -20,6 +20,10 @@ public final class GatewayBudgetDtos {
             String floatTurnId) {
     }
 
+    /** All employee balances for a period (admin roster). */
+    public record BalancePage(List<Balance> balances) {
+    }
+
     public record LedgerLine(
             String operationId,
             int entryNo,

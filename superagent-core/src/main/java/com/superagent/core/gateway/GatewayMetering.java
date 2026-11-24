@@ -30,6 +30,11 @@ public interface GatewayMetering {
 
     Optional<GatewayAccount> findAccount(String period, GatewayAccountType type, String ownerId);
 
+    /** Employee accounts for the period (owner id ascending). Empty default for in-memory test stubs. */
+    default List<GatewayAccount> listEmployees(String period) {
+        return List.of();
+    }
+
     /**
      * Freezes {@code reservedTokens}. May atomically claim float for {@code turnId} when crossing B.
      *

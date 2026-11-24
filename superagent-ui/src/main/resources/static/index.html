@@ -530,6 +530,7 @@
           <div class="nav__group-items">
             <a class="nav__item nav__item--sub" href="#models" data-view="models"><span data-i18n="nav.modelConfig">Configuration</span></a>
             <a class="nav__item nav__item--sub" href="#model-prices" data-view="model-prices"><span data-i18n="nav.modelPrices">Prices</span></a>
+            <a class="nav__item nav__item--sub" href="#model-quota" data-view="model-quota"><span data-i18n="nav.modelQuota">Quota</span></a>
           </div>
         </div>
         <div class="nav__group" data-group="analytics">
@@ -580,31 +581,8 @@
       <div class="admin__body us-body">
         <section class="us-section" id="gwQuotaBox" hidden>
           <h3 class="us-section__title" data-i18n="gw.quotaTitle">Model quota</h3>
+          <p class="gw-empty" id="gwEmpty" hidden data-i18n="gw.noPersonal">No personal quota this month yet.</p>
           <div class="stat-cards us-cards" id="gwQuotaCards"></div>
-          <div class="gw-admin" id="gwAdminBox" hidden>
-            <form class="gw-admin__form" id="gwAllocForm">
-              <input type="text" id="gwAllocUser" data-i18n-ph="gw.userId" placeholder="user id" required />
-              <input type="number" id="gwAllocAmount" min="1" step="1" data-i18n-ph="gw.amount" placeholder="tokens" required />
-              <button type="submit" class="btn" data-i18n="gw.allocate">Allocate</button>
-            </form>
-            <form class="gw-admin__form gw-policy" id="gwPolicyForm">
-              <label class="gw-policy__field"><span data-i18n="gw.policyAlertHours">Alert after (h)</span>
-                <input type="number" id="gwPolicyAlert" min="1" max="168" step="1" required /></label>
-              <label class="gw-policy__field"><span data-i18n="gw.policyTakeoverDays">Takeover after (days)</span>
-                <input type="number" id="gwPolicyTakeover" min="1" max="30" step="1" required /></label>
-              <label class="gw-policy__field"><span data-i18n="gw.policyReserve">Recon reserve target</span>
-                <input type="number" id="gwPolicyReserve" min="0" step="1" required /></label>
-              <label class="gw-policy__field"><span data-i18n="gw.policyReport">Report mode</span>
-                <select id="gwPolicyReport">
-                  <option value="LEGACY">LEGACY</option>
-                  <option value="SHADOW">SHADOW</option>
-                  <option value="GATEWAY_PRIMARY">GATEWAY_PRIMARY</option>
-                </select></label>
-              <button type="submit" class="btn" data-i18n="gw.policySave">Save policy</button>
-            </form>
-            <p class="gw-policy__hint" data-i18n="gw.policyHint">Defaults work out of the box; change them for your company. Seed UNALLOCATED / RECON_RESERVE pools separately.</p>
-            <div class="us-card" id="gwPending" hidden></div>
-          </div>
         </section>
         <section class="us-summary">
           <div class="us-hero" id="usHero"></div>
@@ -695,6 +673,81 @@
           </div>
           <p class="org-empty" id="orgEmpty" data-i18n="org.empty" hidden></p>
         </div>
+      </div>
+    </section>
+
+    <!-- Model gateway quota: company pool, allocate to people, and each person's spend this month. -->
+    <section class="admin" data-pane="model-quota" aria-label="Model quota" hidden>
+      <div class="admin__head">
+        <div>
+          <h2 class="admin__title" data-i18n="gq.title">Model quota</h2>
+          <p class="admin__sub" data-i18n="gq.sub">Seed the company pool, allocate to people, and watch how each person spends this month.</p>
+        </div>
+        <div class="fl-toolbar">
+          <input type="month" id="gqPeriod" aria-label="Period" />
+          <button type="button" class="btn btn--sm" id="gqRefresh" data-i18n="gq.refresh">Refresh</button>
+        </div>
+      </div>
+      <div class="admin__body gq-body">
+        <div class="gq-top">
+          <section class="gq-panel">
+            <h3 class="us-section__title" data-i18n="gq.poolTitle">Company pool</h3>
+            <div class="gq-metrics" id="gqPoolCards"></div>
+            <form class="gw-admin__form" id="gqPoolForm">
+              <input type="number" id="gqPoolAmount" min="0" step="1" data-i18n-ph="gw.poolAmount" placeholder="total tokens" required />
+              <button type="submit" class="btn" data-i18n="gw.poolSeed">Set company pool</button>
+            </form>
+            <p class="gw-policy__hint" data-i18n="gq.poolHint">Setting the pool replaces the UNALLOCATED balance for this month. Allocate from it to people below.</p>
+          </section>
+          <section class="gq-panel">
+            <h3 class="us-section__title" data-i18n="gq.policyTitle">Gateway policy</h3>
+            <form class="gq-policy-grid" id="gqPolicyForm">
+              <label class="gw-policy__field"><span data-i18n="gw.policyAlertHours">Alert after (h)</span>
+                <input type="number" id="gqPolicyAlert" min="1" max="168" step="1" required /></label>
+              <label class="gw-policy__field"><span data-i18n="gw.policyTakeoverDays">Takeover after (days)</span>
+                <input type="number" id="gqPolicyTakeover" min="1" max="30" step="1" required /></label>
+              <label class="gw-policy__field"><span data-i18n="gw.policyReserve">Recon reserve target</span>
+                <input type="number" id="gqPolicyReserve" min="0" step="1" required /></label>
+              <label class="gw-policy__field"><span data-i18n="gw.policyReport">Report mode</span>
+                <select id="gqPolicyReport">
+                  <option value="LEGACY">LEGACY</option>
+                  <option value="SHADOW">SHADOW</option>
+                  <option value="GATEWAY_PRIMARY">GATEWAY_PRIMARY</option>
+                </select></label>
+              <div class="gq-policy-actions">
+                <button type="submit" class="btn" data-i18n="gw.policySave">Save policy</button>
+              </div>
+            </form>
+            <p class="gw-policy__hint" data-i18n="gw.policyHint">Defaults: alert 1h, takeover 2 business days, reserve target 500k, reports LEGACY.</p>
+            <div class="us-card" id="gqPending" hidden></div>
+          </section>
+        </div>
+        <section class="us-section">
+          <div class="us-section__head">
+            <h3 class="us-section__title" data-i18n="gq.peopleTitle">People</h3>
+          </div>
+          <form class="gw-admin__form" id="gqAllocForm">
+            <select id="gqAllocUser" required aria-label="Person"></select>
+            <input type="number" id="gqAllocAmount" min="1" step="1" data-i18n-ph="gw.amount" placeholder="tokens" required />
+            <button type="submit" class="btn btn--primary" data-i18n="gw.allocate">Allocate</button>
+            <button type="button" class="btn" id="gqReclaimBtn" data-i18n="gq.reclaim">Reclaim</button>
+          </form>
+          <div class="mt-table-wrap">
+            <table class="ctable mt-table gq-table">
+              <thead><tr>
+                <th data-i18n="us.colPerson">Person</th>
+                <th class="num" data-i18n="gw.base">Base quota</th>
+                <th class="num" data-i18n="gw.available">Available</th>
+                <th class="num" data-i18n="gw.reserved">Reserved</th>
+                <th class="num" data-i18n="gw.settled">Settled</th>
+                <th class="num" data-i18n="gq.usedPct">Used</th>
+                <th></th>
+              </tr></thead>
+              <tbody id="gqRows"></tbody>
+            </table>
+          </div>
+          <p class="field-hint" id="gqEmpty" data-i18n="gq.noPeople" hidden>No people to show.</p>
+        </section>
       </div>
     </section>
 
@@ -1796,6 +1849,7 @@
   <script src="/js/models.js"></script>
   <script src="/js/settings.js"></script>
   <script src="/js/model-prices.js"></script>
+  <script src="/js/gateway-quota.js"></script>
   <script src="/js/integrations.js"></script>
   <script src="/js/file-storage.js"></script>
   <script src="/js/analytics.js"></script>

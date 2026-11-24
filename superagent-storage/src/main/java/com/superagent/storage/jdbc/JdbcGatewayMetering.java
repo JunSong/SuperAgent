@@ -231,6 +231,21 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
     }
 
     @Override
+    public List<GatewayAccount> listEmployees(String period) {
+        if (period == null || period.isBlank()) {
+            throw new IllegalArgumentException("period is required");
+        }
+        return jdbc.query("""
+                        SELECT period, account_type, owner_id, quota_mode, available_tokens, reserved_tokens,
+                          settled_tokens, base_quota, float_allowance, float_turn_id
+                        FROM gateway_account
+                        WHERE company_id = ? AND period = ? AND account_type = ?
+                        ORDER BY owner_id
+                        """,
+                ACCOUNT, TenantSchema.company(), period, GatewayAccountType.EMPLOYEE.name());
+    }
+
+    @Override
     public Optional<GatewayAccount> findAccount(String period, GatewayAccountType type, String ownerId) {
         String owner = ownerId == null ? POOL_OWNER : ownerId;
         return jdbc.query("""

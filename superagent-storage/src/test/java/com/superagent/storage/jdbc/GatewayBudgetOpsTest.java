@@ -79,6 +79,10 @@ class GatewayBudgetOpsTest {
         assertThat(ledger.findAccount(PERIOD, GatewayAccountType.UNALLOCATED, ""))
                 .hasValueSatisfying(p -> assertThat(p.available()).isEqualTo(50));
 
+        ledger.allocate("a2", PERIOD, "dave", 10, "admin");
+        assertThat(ledger.listEmployees(PERIOD)).extracting(a -> a.owner())
+                .containsExactly("carol", "dave");
+
         assertThat(ledger.listLedger(PERIOD, 50)).isNotEmpty();
 
         TenantContext.run(InCompany.OTHER, () ->

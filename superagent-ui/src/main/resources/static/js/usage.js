@@ -9,13 +9,6 @@ Object.assign(api, {
     + "&tz=" + encodeURIComponent(Intl.DateTimeFormat().resolvedOptions().timeZone || "")).then(kbJson),
   taskUsage: id => fetch("/api/v1/tasks/" + encodeURIComponent(id) + "/usage").then(kbJson),
   gwBalance: () => fetch("/api/v1/gateway/me/balance").then(kbJson),
-  gwAllocate: body => kbPost("/api/v1/gateway/admin/allocations", body),
-  gwPending: () => fetch("/api/v1/gateway/admin/attempts?status=PENDING_RECONCILIATION").then(kbJson),
-  gwReconcile: body => kbPost("/api/v1/gateway/admin/reconciliations", body),
-  gwPolicy: () => fetch("/api/v1/gateway/admin/policy").then(kbJson),
-  gwSavePolicy: body => fetch("/api/v1/gateway/admin/policy", {
-    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-  }).then(kbJson),
 });
 
 const usEl = {
@@ -33,17 +26,8 @@ const usEl = {
   detail: document.getElementById("usDetail"),
   people: document.getElementById("usPeople"),
   gwBox: document.getElementById("gwQuotaBox"),
+  gwEmpty: document.getElementById("gwEmpty"),
   gwCards: document.getElementById("gwQuotaCards"),
-  gwAdmin: document.getElementById("gwAdminBox"),
-  gwPending: document.getElementById("gwPending"),
-  gwAllocForm: document.getElementById("gwAllocForm"),
-  gwAllocUser: document.getElementById("gwAllocUser"),
-  gwAllocAmount: document.getElementById("gwAllocAmount"),
-  gwPolicyForm: document.getElementById("gwPolicyForm"),
-  gwPolicyAlert: document.getElementById("gwPolicyAlert"),
-  gwPolicyTakeover: document.getElementById("gwPolicyTakeover"),
-  gwPolicyReserve: document.getElementById("gwPolicyReserve"),
-  gwPolicyReport: document.getElementById("gwPolicyReport"),
 };
 let usScope = "me"; // "all" on the admin's company page (set by setView)
 let usKind = "agents";
@@ -309,17 +293,17 @@ async function loadTaskUsage(taskId) {
   }));
 }
 
-/** Model-gateway monthly quota (#34): shown when the company has allocated a LIMITED account. */
+/** Personal model-gateway quota for this month (admin pool/allocate lives on #model-quota). */
 async function loadGatewayQuota() {
   if (!usEl.gwBox) return;
   usEl.gwBox.hidden = true;
-  usEl.gwAdmin.hidden = true;
-  usEl.gwPending.hidden = true;
+  if (usEl.gwEmpty) usEl.gwEmpty.hidden = true;
   usEl.gwCards.replaceChildren();
-  let bal;
-  try { bal = await api.gwBalance(); } catch (_) { return; }
+
+  let bal = null;
+  try { bal = await api.gwBalance(); } catch (_) { bal = null; }
   if (!bal) return;
-  usEl.gwBox.hidden = false;
+
   const card = (value, label) => {
     const c = document.createElement("div");
     c.className = "stat-card";
@@ -328,89 +312,11 @@ async function loadGatewayQuota() {
     c.querySelector(".stat-card__label").textContent = label;
     return c;
   };
+
+  usEl.gwBox.hidden = false;
   usEl.gwCards.append(
     card(usShort(bal.available), L("gw.available")),
     card(usShort(bal.reserved), L("gw.reserved")),
     card(usShort(bal.settled), L("gw.settled")),
     card(usShort(bal.baseQuota), L("gw.base")));
-  if (!isAdmin) return;
-  usEl.gwAdmin.hidden = false;
-  try {
-    const pol = await api.gwPolicy();
-    if (pol && usEl.gwPolicyAlert) {
-      usEl.gwPolicyAlert.value = pol.pendingAlertAfterHours;
-      usEl.gwPolicyTakeover.value = pol.pendingCompanyTakeoverAfterBusinessDays;
-      usEl.gwPolicyReserve.value = pol.reconReserveTargetTokens;
-      usEl.gwPolicyReport.value = pol.reportMode || "LEGACY";
-    }
-  } catch (_) { /* ignore */ }
-  try {
-    const page = await api.gwPending();
-    const rows = (page && page.attempts) || [];
-    if (!rows.length) return;
-    usEl.gwPending.hidden = false;
-    usEl.gwPending.replaceChildren();
-    const h = document.createElement("h4");
-    h.className = "gw-pending__title";
-    h.textContent = L("gw.pending");
-    usEl.gwPending.appendChild(h);
-    rows.forEach(a => {
-      const row = document.createElement("div");
-      row.className = "gw-pending__row";
-      const meta = document.createElement("span");
-      meta.textContent = (a.payerUserId || "") + " · R=" + usNum(a.reservedTokens) + " · " + (a.cli || "");
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "btn btn--small";
-      btn.textContent = L("gw.reconcile");
-      btn.addEventListener("click", async () => {
-        const raw = prompt(L("gw.reconcilePrompt"), String(a.reservedTokens));
-        if (raw == null || raw === "") return;
-        const actual = Number(raw);
-        if (!Number.isFinite(actual) || actual < 0) { showToast(L("gw.badAmount"), true); return; }
-        try {
-          await api.gwReconcile({ attemptId: a.id, actualTokens: actual });
-          showToast(L("gw.reconciled"), false);
-          loadGatewayQuota();
-        } catch (e) { showToast(e.message, true); }
-      });
-      row.append(meta, btn);
-      usEl.gwPending.appendChild(row);
-    });
-  } catch (_) { /* admin-only */ }
-}
-
-if (usEl.gwAllocForm) {
-  usEl.gwAllocForm.addEventListener("submit", async e => {
-    e.preventDefault();
-    const userId = (usEl.gwAllocUser.value || "").trim();
-    const amount = Number(usEl.gwAllocAmount.value);
-    if (!userId || !Number.isFinite(amount) || amount <= 0) { showToast(L("gw.badAmount"), true); return; }
-    try {
-      await api.gwAllocate({
-        operationId: "ui-alloc-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8),
-        userId,
-        amount,
-      });
-      usEl.gwAllocAmount.value = "";
-      showToast(L("gw.allocated"), false);
-      loadGatewayQuota();
-    } catch (err) { showToast(err.message, true); }
-  });
-}
-
-if (usEl.gwPolicyForm) {
-  usEl.gwPolicyForm.addEventListener("submit", async e => {
-    e.preventDefault();
-    try {
-      await api.gwSavePolicy({
-        pendingAlertAfterHours: Number(usEl.gwPolicyAlert.value),
-        pendingCompanyTakeoverAfterBusinessDays: Number(usEl.gwPolicyTakeover.value),
-        reconReserveTargetTokens: Number(usEl.gwPolicyReserve.value),
-        reportMode: usEl.gwPolicyReport.value,
-      });
-      showToast(L("gw.policySaved"), false);
-      loadGatewayQuota();
-    } catch (err) { showToast(err.message, true); }
-  });
 }
