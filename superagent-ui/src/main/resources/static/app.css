@@ -2410,6 +2410,10 @@ button.ws-item.is-active { background: #e9e9eb; }
 .gw-admin { margin-top: 12px; display: flex; flex-direction: column; gap: 12px; }
 .gw-admin__form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .gw-admin__form input { min-width: 140px; }
+.gw-policy { align-items: flex-end; }
+.gw-policy__field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.gw-policy__field input, .gw-policy__field select { min-width: 120px; color: inherit; }
+.gw-policy__hint { margin: 0; font-size: 12.5px; color: var(--muted); max-width: 52rem; }
 .gw-pending__title { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
 .gw-pending__row { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between;
   padding: 6px 0; border-top: 1px solid var(--border, #e5e5e5); font-size: 13px; font-variant-numeric: tabular-nums; }

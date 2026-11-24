@@ -10,7 +10,10 @@ import com.superagent.core.gateway.GatewayAttemptStatus;
 import com.superagent.core.gateway.GatewayLedgerEntry;
 import com.superagent.core.gateway.GatewayMetering;
 import com.superagent.core.gateway.GatewayPeriods;
+import com.superagent.core.gateway.GatewayPolicy;
 import com.superagent.core.gateway.GatewayProjectionEvent;
+import com.superagent.core.gateway.GatewayReportMode;
+import com.superagent.gateway.GatewayPolicyService;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -33,10 +36,12 @@ import java.util.Locale;
 public class GatewayBudgetController {
 
     private final GatewayMetering metering;
+    private final GatewayPolicyService policy;
     private final Clock clock;
 
-    public GatewayBudgetController(GatewayMetering metering, Clock clock) {
+    public GatewayBudgetController(GatewayMetering metering, GatewayPolicyService policy, Clock clock) {
         this.metering = metering;
+        this.policy = policy;
         this.clock = clock;
     }
 
@@ -156,8 +161,40 @@ public class GatewayBudgetController {
                 metering.listProjections(p, limit).stream().map(GatewayBudgetController::toProjection).toList()));
     }
 
+    @GetMapping(ApiPaths.GATEWAY_ADMIN + "/policy")
+    public ApiResponse<GatewayBudgetDtos.Policy> getPolicy() {
+        return ApiResponse.ok(toPolicy(policy.get()));
+    }
+
+    @PutMapping(ApiPaths.GATEWAY_ADMIN + "/policy")
+    public ApiResponse<GatewayBudgetDtos.Policy> putPolicy(@RequestBody GatewayBudgetDtos.PolicyUpdate body) {
+        requireBody(body);
+        GatewayReportMode mode = null;
+        if (body.reportMode() != null && !body.reportMode().isBlank()) {
+            try {
+                mode = GatewayReportMode.valueOf(body.reportMode().trim().toUpperCase(Locale.ROOT));
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException(
+                        "reportMode must be LEGACY, SHADOW, or GATEWAY_PRIMARY");
+            }
+        }
+        return ApiResponse.ok(toPolicy(policy.update(
+                body.pendingAlertAfterHours(),
+                body.pendingCompanyTakeoverAfterBusinessDays(),
+                body.reconReserveTargetTokens(),
+                mode)));
+    }
+
     private String periodOrCurrent(String period) {
         return period == null || period.isBlank() ? GatewayPeriods.current(clock) : period;
+    }
+
+    private static GatewayBudgetDtos.Policy toPolicy(GatewayPolicy p) {
+        return new GatewayBudgetDtos.Policy(
+                p.pendingAlertAfterHours(),
+                p.pendingCompanyTakeoverAfterBusinessDays(),
+                p.reconReserveTargetTokens(),
+                p.reportMode().name());
     }
 
     private static void requireBody(Object body) {

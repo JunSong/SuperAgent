@@ -12,6 +12,10 @@ Object.assign(api, {
   gwAllocate: body => kbPost("/api/v1/gateway/admin/allocations", body),
   gwPending: () => fetch("/api/v1/gateway/admin/attempts?status=PENDING_RECONCILIATION").then(kbJson),
   gwReconcile: body => kbPost("/api/v1/gateway/admin/reconciliations", body),
+  gwPolicy: () => fetch("/api/v1/gateway/admin/policy").then(kbJson),
+  gwSavePolicy: body => fetch("/api/v1/gateway/admin/policy", {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  }).then(kbJson),
 });
 
 const usEl = {
@@ -35,6 +39,11 @@ const usEl = {
   gwAllocForm: document.getElementById("gwAllocForm"),
   gwAllocUser: document.getElementById("gwAllocUser"),
   gwAllocAmount: document.getElementById("gwAllocAmount"),
+  gwPolicyForm: document.getElementById("gwPolicyForm"),
+  gwPolicyAlert: document.getElementById("gwPolicyAlert"),
+  gwPolicyTakeover: document.getElementById("gwPolicyTakeover"),
+  gwPolicyReserve: document.getElementById("gwPolicyReserve"),
+  gwPolicyReport: document.getElementById("gwPolicyReport"),
 };
 let usScope = "me"; // "all" on the admin's company page (set by setView)
 let usKind = "agents";
@@ -320,6 +329,15 @@ async function loadGatewayQuota() {
   if (!isAdmin) return;
   usEl.gwAdmin.hidden = false;
   try {
+    const pol = await api.gwPolicy();
+    if (pol && usEl.gwPolicyAlert) {
+      usEl.gwPolicyAlert.value = pol.pendingAlertAfterHours;
+      usEl.gwPolicyTakeover.value = pol.pendingCompanyTakeoverAfterBusinessDays;
+      usEl.gwPolicyReserve.value = pol.reconReserveTargetTokens;
+      usEl.gwPolicyReport.value = pol.reportMode || "LEGACY";
+    }
+  } catch (_) { /* ignore */ }
+  try {
     const page = await api.gwPending();
     const rows = (page && page.attempts) || [];
     if (!rows.length) return;
@@ -369,6 +387,22 @@ if (usEl.gwAllocForm) {
       });
       usEl.gwAllocAmount.value = "";
       showToast(L("gw.allocated"), false);
+      loadGatewayQuota();
+    } catch (err) { showToast(err.message, true); }
+  });
+}
+
+if (usEl.gwPolicyForm) {
+  usEl.gwPolicyForm.addEventListener("submit", async e => {
+    e.preventDefault();
+    try {
+      await api.gwSavePolicy({
+        pendingAlertAfterHours: Number(usEl.gwPolicyAlert.value),
+        pendingCompanyTakeoverAfterBusinessDays: Number(usEl.gwPolicyTakeover.value),
+        reconReserveTargetTokens: Number(usEl.gwPolicyReserve.value),
+        reportMode: usEl.gwPolicyReport.value,
+      });
+      showToast(L("gw.policySaved"), false);
       loadGatewayQuota();
     } catch (err) { showToast(err.message, true); }
   });

@@ -587,6 +587,22 @@
               <input type="number" id="gwAllocAmount" min="1" step="1" data-i18n-ph="gw.amount" placeholder="tokens" required />
               <button type="submit" class="btn" data-i18n="gw.allocate">Allocate</button>
             </form>
+            <form class="gw-admin__form gw-policy" id="gwPolicyForm">
+              <label class="gw-policy__field"><span data-i18n="gw.policyAlertHours">Alert after (h)</span>
+                <input type="number" id="gwPolicyAlert" min="1" max="168" step="1" required /></label>
+              <label class="gw-policy__field"><span data-i18n="gw.policyTakeoverDays">Takeover after (days)</span>
+                <input type="number" id="gwPolicyTakeover" min="1" max="30" step="1" required /></label>
+              <label class="gw-policy__field"><span data-i18n="gw.policyReserve">Recon reserve target</span>
+                <input type="number" id="gwPolicyReserve" min="0" step="1" required /></label>
+              <label class="gw-policy__field"><span data-i18n="gw.policyReport">Report mode</span>
+                <select id="gwPolicyReport">
+                  <option value="LEGACY">LEGACY</option>
+                  <option value="SHADOW">SHADOW</option>
+                  <option value="GATEWAY_PRIMARY">GATEWAY_PRIMARY</option>
+                </select></label>
+              <button type="submit" class="btn" data-i18n="gw.policySave">Save policy</button>
+            </form>
+            <p class="gw-policy__hint" data-i18n="gw.policyHint">Defaults work out of the box; change them for your company. Seed UNALLOCATED / RECON_RESERVE pools separately.</p>
             <div class="us-card" id="gwPending" hidden></div>
           </div>
         </section>

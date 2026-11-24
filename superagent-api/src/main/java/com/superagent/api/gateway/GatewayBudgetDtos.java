@@ -80,4 +80,22 @@ public final class GatewayBudgetDtos {
 
     public record ProjectionPage(List<ProjectionLine> projections) {
     }
+
+    /**
+     * Company gateway policy. Null fields on update keep the current value.
+     * Defaults: alert 1h, takeover 2 business days, recon reserve target 500k, reportMode LEGACY.
+     */
+    public record Policy(
+            int pendingAlertAfterHours,
+            int pendingCompanyTakeoverAfterBusinessDays,
+            long reconReserveTargetTokens,
+            String reportMode) {
+    }
+
+    public record PolicyUpdate(
+            Integer pendingAlertAfterHours,
+            Integer pendingCompanyTakeoverAfterBusinessDays,
+            Long reconReserveTargetTokens,
+            String reportMode) {
+    }
 }
