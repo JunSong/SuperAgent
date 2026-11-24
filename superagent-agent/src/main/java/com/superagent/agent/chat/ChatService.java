@@ -29,7 +29,11 @@ import com.superagent.core.chat.ChatSession;
 import com.superagent.core.chat.ChatStore;
 import com.superagent.core.chat.ImageAttachment;
 import com.superagent.core.chat.MessageRole;
+import com.superagent.core.chat.RunCredential;
 import com.superagent.core.chat.SessionStatus;
+import com.superagent.core.error.ForbiddenException;
+import com.superagent.core.gateway.ModelRunLease;
+import com.superagent.core.gateway.ModelRunLeaseService;
 import com.superagent.core.tenant.TenantContext;
 import com.superagent.core.tenant.TenantPaths;
 import com.superagent.core.user.UserStore;
@@ -106,6 +110,7 @@ public class ChatService implements org.springframework.context.SmartLifecycle {
     private final SettingsService settingsService;
     private final ProviderService providerService;
     private CredentialService credentials; // null in tests: runs use the server's environment
+    private ModelRunLeaseService modelRunLeases; // null / unmanaged: CLI still gets the company key
     private final ImageAttachmentStore images;
     private final FileService files;
     private final String defaultModel;
@@ -233,6 +238,11 @@ public class ChatService implements org.springframework.context.SmartLifecycle {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     void setCredentials(CredentialService credentials) {
         this.credentials = credentials;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setModelRunLeases(ModelRunLeaseService modelRunLeases) {
+        this.modelRunLeases = modelRunLeases;
     }
 
     // Looked up per turn: the customizer (the SuperAgent's) itself depends on this service.
@@ -843,7 +853,7 @@ public class ChatService implements org.springframework.context.SmartLifecycle {
         boolean saved = false;
         try {
             Attempt attempt = attempt(session, agentType, runner, model, systemPrompt, agentMemory, prompt, attached,
-                    user, assistantMessageId, emitter, cancellation);
+                    user, userMessageId, assistantMessageId, emitter, cancellation);
             // The model itself can't run (endpoint, every key, quota, gone): the same turn again on the next model the
             // conversation may use, quietly. The failed one is passed over for a while, then tried again.
             for (int hop = 0; hop < MODEL_HOPS && agent != null && modelRouter != null && attempt.failed()
@@ -862,7 +872,7 @@ public class ChatService implements org.springframework.context.SmartLifecycle {
                 runner = runners.get(nextType);
                 ChatSession moved = sessionForTurn(agent, next, true); // another model: a new session, from memory + recent messages
                 attempt = attempt(moved, agentType, runner, model, systemPrompt, memory.context(agent, Set.of(userMessageId), user),
-                        prompt, attached, user, assistantMessageId, emitter, cancellation);
+                        prompt, attached, user, userMessageId, assistantMessageId, emitter, cancellation);
             }
             if (agent != null && !cancellation.isCancelled()) {
                 if (!attempt.failed()) {
@@ -871,8 +881,8 @@ public class ChatService implements org.springframework.context.SmartLifecycle {
                     retried = true;
                     ChatSession fresh = rotateSession(agent);
                     attempt = attempt(fresh, agentType, runner, model, systemPrompt,
-                            memory.context(agent, Set.of(userMessageId), user), prompt, attached, user, assistantMessageId,
-                            emitter, cancellation);
+                            memory.context(agent, Set.of(userMessageId), user), prompt, attached, user, userMessageId,
+                            assistantMessageId, emitter, cancellation);
                     if (attempt.failed()) {
                         memory.recordFailure(agent, attempt.error());
                     } else {
@@ -921,7 +931,8 @@ public class ChatService implements org.springframework.context.SmartLifecycle {
     /** One run of the turn in {@code session}: output streams live, errors are only collected. */
     private Attempt attempt(ChatSession session, AgentType agentType, AgentRunner runner, String model,
                             String systemPrompt, String agentMemory, String prompt, List<ImageAttachment> attached,
-                            String user, String assistantMessageId, TurnStream emitter, Cancellation cancellation) {
+                            String user, String userMessageId, String assistantMessageId, TurnStream emitter,
+                            Cancellation cancellation) {
         StringBuilder textAccumulator = new StringBuilder();
         AtomicReference<String> resultText = new AtomicReference<>();
         AtomicReference<String> error = new AtomicReference<>();
@@ -957,6 +968,19 @@ public class ChatService implements org.springframework.context.SmartLifecycle {
                 : mcpGrants == null ? null : mcpGrants.openChat(user, session.agentId(), session.id(), assistantMessageId, session.workspaceDir());
         String cli = agentType.cliName();
         CredentialService.Choice choice = credentials == null ? new CredentialService.Choice(null) : credentials.current(cli);
+        boolean managed = modelRunLeases != null && modelRunLeases.managed(cli);
+        // Managed: ensure the company has a Key (gateway will decrypt it), but inject only a run token into the CLI.
+        ModelRunLease lease = null;
+        RunCredential runCredential = choice.credential();
+        if (managed) {
+            if (choice.credential() == null || choice.credential().apiKey() == null || choice.credential().apiKey().isBlank()) {
+                throw new ForbiddenException("本公司还没有配置 " + cli + " 的 API Key：受管网关不能使用机器上的登录态");
+            }
+            String runId = java.util.UUID.randomUUID().toString();
+            // turnId = userMessageId (#34): tools / hops / retries keep this; a new user message starts a new turn.
+            lease = modelRunLeases.issue(userMessageId, runId, user, cli, model, java.time.Duration.ofHours(2));
+            runCredential = new RunCredential(lease.runId(), lease.gatewayBaseUrl(), lease.token(), true);
+        }
         // The company's connectors, with the identity of whoever sent this message (their own authorizations).
         List<McpServerSpec> connected = connectors == null ? List.of() : connectors.mcpServersFor(user);
         List<String> tools = allowedTools;
@@ -974,13 +998,14 @@ public class ChatService implements org.springframework.context.SmartLifecycle {
                 : worksInTasks(emitter.agent()) ? taskResults.prompt(session.id(), prompt) : prompt;
         AgentRunRequest request = new AgentRunRequest(session.id(), agentSessionId, session.workspaceDir(), sent, model,
                 tools, skipPermissions && (special == null || special.runsCommands(emitter.agent())), McpGrants.withServers(grant == null ? null : mcpGrants.mcpConfig(grant), connected),
-                systemPrompt, attached, agentMemory, choice.credential());
+                systemPrompt, attached, agentMemory, runCredential);
         try {
             runOnce(runner, request, sink, cancellation, error, session, emitter.timer());
             // The endpoint or key failed (auth, quota, server down) before anything was said: switch to the
             // next key in the pool and try the same turn once more, so the user rarely sees the failure.
+            // Managed runs rotate Keys inside the gateway — do not put the next company Key into the CLI.
             boolean nothingSaid = textAccumulator.isEmpty() && resultText.get() == null;
-            if (credentials != null && nothingSaid && error.get() != null && !cancellation.isCancelled()) {
+            if (!managed && credentials != null && nothingSaid && error.get() != null && !cancellation.isCancelled()) {
                 Optional<CredentialService.Choice> next = credentials.failover(cli, choice, error.get());
                 if (next.isPresent()) {
                     log.info("session {}: retrying the turn on endpoint {}", session.id(), next.get().id());
@@ -990,6 +1015,9 @@ public class ChatService implements org.springframework.context.SmartLifecycle {
                 }
             }
         } finally {
+            if (lease != null) {
+                modelRunLeases.revoke(lease.token());
+            }
             if (grant != null) {
                 mcpGrants.close(grant);
             }

@@ -66,6 +66,8 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/v1/orgs/registration").permitAll()
                         .requestMatchers("/oauth2/**", "/login/oauth2/**", "/api/v1/auth/wechat/**").permitAll()
                         .requestMatchers("/mcp").permitAll() // gated by X-MCP-Token in McpController
+                        // Model gateway: gated by per-run opaque token in GatewayController (not session).
+                        .requestMatchers("/api/v1/gateway/**").permitAll()
                         // External callers: gated by the automation's own X-Automation-Token in AutomationService.
                         .requestMatchers(HttpMethod.POST, "/api/v1/automations/*/trigger").permitAll()
                         .requestMatchers("/api/v1/users/**").hasRole("ADMIN")

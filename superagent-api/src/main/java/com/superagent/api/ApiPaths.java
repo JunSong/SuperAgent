@@ -92,6 +92,12 @@ public final class ApiPaths {
     /** Admin employee handover: preview and execute ownership transfer. */
     public static final String HANDOVER = V1 + "/admin/handover";
 
+    /**
+     * Control-plane model gateway: CLI calls with a per-run token; company keys stay here.
+     * Paths under {@code /model/{protocol}/**} (anthropic / openai).
+     */
+    public static final String GATEWAY = V1 + "/gateway";
+
     private ApiPaths() {
     }
 }

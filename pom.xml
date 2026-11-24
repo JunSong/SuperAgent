@@ -38,6 +38,7 @@
     <module>superagent-project</module>
     <module>superagent-glossary</module>
     <module>superagent-cost</module>
+    <module>superagent-gateway</module>
     <module>superagent-docs</module>
     <module>superagent-media</module>
     <module>superagent-agent</module>
@@ -112,6 +113,11 @@
       <dependency>
         <groupId>com.superagent</groupId>
         <artifactId>superagent-cost</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.superagent</groupId>
+        <artifactId>superagent-gateway</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>

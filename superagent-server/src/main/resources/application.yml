@@ -50,6 +50,11 @@ superagent:
       max-users: ${SUPERAGENT_QUOTA_MAX_USERS:0}
       max-running-tasks: ${SUPERAGENT_QUOTA_MAX_RUNNING_TASKS:0}
       monthly-tokens: ${SUPERAGENT_QUOTA_MONTHLY_TOKENS:0}
+  # Model gateway (#34): comma-separated CLI keys that must call /api/v1/gateway with a run token (no company Key in the CLI).
+  # Empty = legacy (CLI still gets the decrypted Key). Example: deepseek
+  gateway:
+    managed-clis: ${SUPERAGENT_GATEWAY_MANAGED_CLIS:}
+    # self-url: ${SUPERAGENT_GATEWAY_SELF_URL:}   # optional; defaults to http://127.0.0.1:<server.port>
   storage:
     # Business data is always in MySQL. Analytics data (token usage, the agent run log, turn timings) is too, unless
     # this is clickhouse; then those tables alone go to superagent.storage.clickhouse.* (url, username, password).
