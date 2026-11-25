@@ -1222,6 +1222,18 @@ public class TaskService implements TaskRecovery {
             settle(task, TaskStatus.ERROR, 0, choice.reasoning(), BigDecimal.ZERO);
             return;
         }
+        // Managed CLI without the creator's monthly quota: refuse before the runner burns a turn.
+        if (modelRunLeases != null && choice.cli() != null && modelRunLeases.managed(choice.cli())
+                && !modelRunLeases.payerMayUse(choice.cli(), task.createdBy())) {
+            String why = "受管 CLI " + choice.cli() + " 需要先为创建人分配本月模型额度（模型额度页），当前无法运行 "
+                    + choice.model() + "。";
+            choice = new com.superagent.core.task.TaskModelChoice(task.id(), 0, choice.by(), null, null, null, null,
+                    choice.judge(), choice.candidates(), why, choice.createdAt());
+            recordChoice(choice);
+            runStore.appendEvent(AgentEvent.of(task.id(), Long.MAX_VALUE, AgentEventType.ERROR, why));
+            settle(task, TaskStatus.ERROR, 0, why, BigDecimal.ZERO);
+            return;
+        }
         AgentType type = AgentType.fromString(choice.cli());
         if (!runners.containsKey(type)) {
             choice = new com.superagent.core.task.TaskModelChoice(task.id(), 0, com.superagent.core.task.TaskModelChoice.BY_FALLBACK,

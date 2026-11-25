@@ -635,7 +635,7 @@ public class ChatService implements org.springframework.context.SmartLifecycle {
                 throw new ChatBusyException(running.byName() + " 触发的回复正在进行中，请稍候");
             }
         }
-        String model = resolveModel(agent);
+        String model = resolveModel(agent, user);
         // #34: mint the turn id before sessionForTurn so a length handoff summary shares this turn with the reply.
         String userMessageId = UUID.randomUUID().toString();
         try {
@@ -779,15 +779,53 @@ public class ChatService implements org.springframework.context.SmartLifecycle {
      * Every conversation runs on the admin's default model, not on a model of its own: the chat thinks and hands out
      * work, which wants the strongest; the work itself runs in tasks, each on a model chosen for it.
      */
+    /** Display / tests without a payer: same as {@link #resolveModel(Agent, String)} with no user filter. */
     public String resolveModel(Agent agent) {
-        if (agent != null && modelRouter != null) {
-            List<String> usable = modelRouter.chatModels();
+        return resolveModel(agent, null);
+    }
+
+    /**
+     * Picks a model this payer can actually run: company-authenticated CLI, and if that CLI is managed,
+     * the payer must already have a monthly gateway quota account.
+     */
+    public String resolveModel(Agent agent, String payerUserId) {
+        if (modelRouter != null) {
+            List<String> company = modelRouter.chatModels();
+            List<String> usable = company.stream().filter(m -> assignableToPayer(m, payerUserId)).toList();
             if (!usable.isEmpty()) {
-                return usable.get(0); // the default while it works; a stand-in nobody has to notice when it doesn't
+                return usable.get(0);
             }
+            if (!company.isEmpty()) {
+                throw new ForbiddenException(
+                        "可用的受管模型需要先分配额度：请管理员在「模型额度」里为你分配本月额度");
+            }
+            throw new ForbiddenException(
+                    "本公司还没有可用的大模型：请管理员在「模型」里为至少一个 CLI 配置 API Key，并确认默认/备份模型可用");
         }
         String model = settingsService.agentDefaultModel();
         return model != null ? model : defaultModel;
+    }
+
+    /**
+     * Unmanaged + company-auth → OK. Managed → company API key (not machine login) and payer has gateway quota.
+     * When {@code payerUserId} is null (UI preview without user), managed CLIs are still listed only if the
+     * company can authenticate them; quota is checked at send time.
+     */
+    private boolean assignableToPayer(String model, String payerUserId) {
+        String cli = providerService.cliFor(model).orElse(null);
+        if (cli == null || !providerService.canAuthenticate(cli)) {
+            return false;
+        }
+        if (modelRunLeases == null || !modelRunLeases.managed(cli)) {
+            return true;
+        }
+        if (credentials != null && !credentials.hasOwnKey(cli)) {
+            return false;
+        }
+        if (payerUserId == null || payerUserId.isBlank()) {
+            return true; // company-level preview; send path always passes the payer
+        }
+        return modelRunLeases.payerMayUse(cli, payerUserId);
     }
 
     /**

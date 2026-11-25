@@ -15,6 +15,15 @@ public interface ModelRunLeaseService {
     boolean managed(String cli);
 
     /**
+     * Whether {@code payerUserId} may be assigned {@code cli} under gateway policy.
+     * Unmanaged CLIs: always true here (company-key checks stay with the credential layer).
+     * Managed CLIs: the payer needs a monthly employee quota account (admin allocate).
+     */
+    default boolean payerMayUse(String cli, String payerUserId) {
+        return !managed(cli);
+    }
+
+    /**
      * Opens a lease for one CLI process. Uses {@link com.superagent.core.tenant.TenantContext}
      * for the company. {@code turnId} is the chat {@code userMessageId} or the automation {@code taskId}.
      */

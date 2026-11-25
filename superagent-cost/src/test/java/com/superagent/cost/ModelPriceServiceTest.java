@@ -29,11 +29,14 @@ class ModelPriceServiceTest {
     private final List<ProviderModelDto> running = new ArrayList<>();
     private final ModelPriceService prices;
 
+    private final ProviderService providers;
+
     ModelPriceServiceTest() {
-        ProviderService providers = mock(ProviderService.class);
+        providers = mock(ProviderService.class);
         when(providers.storedModels(anyString())).thenReturn(List.of());
         when(providers.storedModels("claude")).thenReturn(running);
         when(providers.cliFor(any())).thenReturn(Optional.of("claude"));
+        when(providers.canAuthenticate(anyString())).thenReturn(true);
         SystemSettingStore store = new SystemSettingStore() {
             @Override public Map<String, String> all() { return new HashMap<>(rows); }
             @Override public void put(String key, String value) { if (value == null) rows.remove(key); else rows.put(key, value); }
@@ -121,5 +124,33 @@ class ModelPriceServiceTest {
         // None set: the most expensive that can run.
         when(settings.agentDefaultModel()).thenReturn(null);
         assertThat(prices.chatModels()).containsExactly("strong", "mid", "fast");
+    }
+
+    @Test
+    void skipsModelsWhoseCliHasNoCompanyAuth() throws Exception {
+        for (String id : List.of("gpt-open", "ds-chat")) {
+            running.add(new ProviderModelDto(id, id, List.of(), null, "none", null, true).withInference("ok", null, null));
+        }
+        // Rebind: gpt on codex (no auth), ds on deepseek (auth).
+        when(providers.storedModels(anyString())).thenReturn(List.of());
+        when(providers.storedModels("codex")).thenReturn(List.of(running.get(0)));
+        when(providers.storedModels("deepseek")).thenReturn(List.of(running.get(1)));
+        when(providers.cliFor("gpt-open")).thenReturn(Optional.of("codex"));
+        when(providers.cliFor("ds-chat")).thenReturn(Optional.of("deepseek"));
+        when(providers.canAuthenticate("codex")).thenReturn(false);
+        when(providers.canAuthenticate("deepseek")).thenReturn(true);
+        when(providers.canAuthenticate("claude")).thenReturn(false);
+
+        prices.useCatalog(ModelCatalog.parse(new ByteArrayInputStream("""
+                {"openai":{"models":{"gpt-open":{"cost":{"input":5,"output":15}},"ds-chat":{"cost":{"input":0.3,"output":1}}}}}
+                """.getBytes(StandardCharsets.UTF_8))));
+        com.superagent.platform.settings.SettingsService settings = mock(com.superagent.platform.settings.SettingsService.class);
+        when(settings.agentDefaultModel()).thenReturn("gpt-open"); // admin default has no key
+        when(settings.backupModels()).thenReturn(List.of());
+        prices.setSettings(settings);
+
+        assertThat(prices.candidates()).extracting(ModelPriceService.Candidate::id).containsExactly("ds-chat");
+        assertThat(prices.chatModels()).containsExactly("ds-chat");
+        assertThat(prices.cheapest()).map(c -> c.model()).contains("ds-chat");
     }
 }

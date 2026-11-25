@@ -1,5 +1,7 @@
 package com.superagent.gateway;
 
+import com.superagent.core.gateway.GatewayMetering;
+import com.superagent.core.gateway.GatewayPeriods;
 import com.superagent.core.gateway.ModelRunLease;
 import com.superagent.core.gateway.ModelRunLeaseService;
 import com.superagent.core.tenant.TenantContext;
@@ -37,6 +39,7 @@ public class ModelRunGrants implements ModelRunLeaseService {
     private final Predicate<String> managedCheck;
     private final boolean configuredSelfUrl;
     private volatile String selfBase;
+    private GatewayMetering metering; // null in early tests: managed CLIs are not assignable to payers
 
     @Autowired
     public ModelRunGrants(
@@ -45,6 +48,11 @@ public class ModelRunGrants implements ModelRunLeaseService {
             @Value("${server.port:18080}") int port,
             Clock clock) {
         this(policy::managed, selfUrl, port, clock, selfUrl != null && !selfUrl.isBlank());
+    }
+
+    @Autowired(required = false)
+    void setMetering(GatewayMetering metering) {
+        this.metering = metering;
     }
 
     /** Test / explicit wiring with a fixed managed set. */
@@ -74,6 +82,20 @@ public class ModelRunGrants implements ModelRunLeaseService {
     @Override
     public boolean managed(String cli) {
         return managedCheck.test(cli);
+    }
+
+    @Override
+    public boolean payerMayUse(String cli, String payerUserId) {
+        if (!managed(cli)) {
+            return true;
+        }
+        if (metering == null || payerUserId == null || payerUserId.isBlank()) {
+            return false;
+        }
+        String period = GatewayPeriods.current(clock);
+        return metering.findEmployee(period, payerUserId)
+                .filter(a -> a.baseQuota() > 0 || a.available() > 0)
+                .isPresent();
     }
 
     @Override

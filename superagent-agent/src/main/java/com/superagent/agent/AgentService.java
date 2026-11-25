@@ -408,7 +408,11 @@ public class AgentService {
     private com.superagent.core.project.ProjectAccess projects; // null in tests: no projects
     /** The model its conversation runs on (the default, or the strongest that can run); null when none can. */
     public String model(String id, String user) {
-        return chatService.resolveModel(requireViewer(id, user));
+        try {
+            return chatService.resolveModel(requireViewer(id, user), user);
+        } catch (com.superagent.core.error.ForbiddenException e) {
+            return null;
+        }
     }
     private com.superagent.core.agent.AgentParentStore parents; // null in tests: no parent agents
 

@@ -129,6 +129,24 @@ public class ProviderService {
         return credentials != null && credentials.hasOwnKey(providerKey);
     }
 
+    /**
+     * Whether this company can actually call {@code providerKey}: own API key, or (when enabled) Codex CLI login.
+     * Model routing uses this so users are not assigned a CLI that will fail for want of credentials.
+     * When no credential store is wired (unit tests), returns true so probe-only fixtures keep working.
+     */
+    public boolean canAuthenticate(String providerKey) {
+        if (providerKey == null || providerKey.isBlank()) {
+            return false;
+        }
+        if (credentials == null) {
+            return true;
+        }
+        if (hasKey(providerKey)) {
+            return true;
+        }
+        return ProviderCatalog.find(providerKey).map(this::machineLogin).orElse(false);
+    }
+
     /** Without a key store (tests), the machine's own CLI login stands in. */
     private boolean machineLogin(ProviderCatalog.Entry entry) {
         if (credentials != null && credentials.allowsCliLogin(entry.key())) {

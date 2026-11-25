@@ -157,11 +157,18 @@ public class ModelPriceService implements ModelRouter {
 
     // --- what can run, at what price ---
 
-    /** Every model that can run now, cheapest first (unpriced last). */
+    /**
+     * Every model that can run for this company now, cheapest first (unpriced last).
+     * Probe-pass alone is not enough: the CLI must also be authenticatable (company API key,
+     * or allowed Codex login) — otherwise chat/task would pick a model that always fails.
+     */
     public List<Candidate> candidates() {
         Map<String, String> saved = store.all();
         Map<String, String> clis = new LinkedHashMap<>();
         for (ProviderCatalog.Entry e : ProviderCatalog.all()) {
+            if (!providers.canAuthenticate(e.key())) {
+                continue;
+            }
             for (ProviderModelDto m : providers.storedModels(e.key())) {
                 if (m.canInfer()) {
                     providers.cliFor(m.id()).ifPresent(cli -> clis.putIfAbsent(m.id(), cli));
@@ -217,8 +224,9 @@ public class ModelPriceService implements ModelRouter {
         settings.backupModels().stream().filter(usable).filter(m -> !out.contains(m)).forEach(out::add);
         runnable.stream().sorted(Comparator.comparingDouble(Candidate::blended).reversed()) // strongest first
                 .map(Candidate::id).filter(usable).filter(m -> !out.contains(m)).forEach(out::add);
+        // Do not force the admin default when nothing authenticatable remains — callers should fail closed.
         if (out.isEmpty()) {
-            out.add(def); // nothing else either: keep trying the default
+            return List.of();
         }
         noteStandIn(def, out.get(0));
         return out;
