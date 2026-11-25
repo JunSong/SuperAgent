@@ -2429,6 +2429,8 @@ button.ws-item.is-active { background: #e9e9eb; }
 }
 .gq-panel > .gw-policy__hint { margin-top: auto; }
 .gq-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.gq-metrics--4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 900px) { .gq-metrics--4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .gq-metric {
   display: flex; flex-direction: row; align-items: baseline; justify-content: space-between; gap: 8px;
   min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg, transparent);
@@ -2441,6 +2443,16 @@ button.ws-item.is-active { background: #e9e9eb; }
 .gq-policy-grid .gw-policy__field { min-width: 0; }
 .gq-policy-grid .gw-policy__field input,
 .gq-policy-grid .gw-policy__field select { width: 100%; min-width: 0; box-sizing: border-box; }
+.gq-managed-clis {
+  grid-column: 1 / -1; margin: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
+}
+.gq-managed-clis legend { padding: 0 4px; font-size: 12px; color: var(--muted); }
+.gq-managed-clis__list {
+  display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 6px;
+}
+.gq-managed-clis__list label {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink); cursor: pointer;
+}
 .gq-policy-actions { grid-column: 1 / -1; }
 .gq-table .gq-row--none td { color: var(--muted); }
 .gq-table td:last-child { white-space: nowrap; }

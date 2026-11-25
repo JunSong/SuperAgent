@@ -87,7 +87,7 @@ class UpstreamProxyMeteringTest {
         ModelRunLease lease1 = TenantContext.call("co1",
                 () -> grants.issue("t1", "r1", "alice", "deepseek", "m", Duration.ofMinutes(5)));
         int status = proxy.forward(grants.require("Bearer " + lease1.token()), "anthropic", "/v1/messages",
-                "POST", Map.of(), body, new ByteArrayOutputStream(), c -> {
+                "POST", Map.of(), body, new ByteArrayOutputStream(), (c, ct) -> {
                 });
         assertThat(status).isEqualTo(200);
         assertThat(stubHits.get()).isEqualTo(1);
@@ -98,7 +98,7 @@ class UpstreamProxyMeteringTest {
         ModelRunLease lease2 = TenantContext.call("co1",
                 () -> grants.issue("t2", "r2", "alice", "deepseek", "m", Duration.ofMinutes(5)));
         assertThatThrownBy(() -> proxy.forward(grants.require("Bearer " + lease2.token()), "anthropic",
-                "/v1/messages", "POST", Map.of(), body, new ByteArrayOutputStream(), c -> {
+                "/v1/messages", "POST", Map.of(), body, new ByteArrayOutputStream(), (c, ct) -> {
                 }))
                 .isInstanceOf(GatewayQuotaInsufficientException.class);
         assertThat(stubHits.get()).isEqualTo(1);
@@ -202,6 +202,16 @@ class UpstreamProxyMeteringTest {
         @Override
         public GatewayAccount allocate(String operationId, String period, String toUserId, long amount, String actorUserId) {
             throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public GatewayAccount setFloatAllowance(String period, String userId, long floatAllowance) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public int applyDefaultFloat(String period, long floatAllowance) {
+            return 0;
         }
 
         @Override

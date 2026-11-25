@@ -13,6 +13,10 @@ Object.assign(api, {
   }).then(kbJson),
   gwAllocate: body => kbPost("/api/v1/gateway/admin/allocations", body),
   gwReclaim: body => kbPost("/api/v1/gateway/admin/reclaims", body),
+  gwSetFloat: body => fetch("/api/v1/gateway/admin/floats", {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  }).then(kbJson),
+  gwApplyFloatDefaults: body => kbPost("/api/v1/gateway/admin/float-defaults", body || {}),
   gwPending: (period) => fetch("/api/v1/gateway/admin/attempts?status=PENDING_RECONCILIATION"
     + (period ? "&period=" + encodeURIComponent(period) : "")).then(kbJson),
   gwReconcile: body => kbPost("/api/v1/gateway/admin/reconciliations", body),
@@ -27,20 +31,86 @@ const gqEl = {
   refresh: document.getElementById("gqRefresh"),
   poolCards: document.getElementById("gqPoolCards"),
   poolForm: document.getElementById("gqPoolForm"),
+  poolType: document.getElementById("gqPoolType"),
   poolAmount: document.getElementById("gqPoolAmount"),
   allocForm: document.getElementById("gqAllocForm"),
   allocUser: document.getElementById("gqAllocUser"),
   allocAmount: document.getElementById("gqAllocAmount"),
+  allocFloat: document.getElementById("gqAllocFloat"),
   reclaimBtn: document.getElementById("gqReclaimBtn"),
+  setFloatBtn: document.getElementById("gqSetFloatBtn"),
+  applyFloatBtn: document.getElementById("gqApplyFloatBtn"),
   rows: document.getElementById("gqRows"),
   empty: document.getElementById("gqEmpty"),
   policyForm: document.getElementById("gqPolicyForm"),
   policyAlert: document.getElementById("gqPolicyAlert"),
   policyTakeover: document.getElementById("gqPolicyTakeover"),
   policyReserve: document.getElementById("gqPolicyReserve"),
+  policyFloat: document.getElementById("gqPolicyFloat"),
   policyReport: document.getElementById("gqPolicyReport"),
+  managedList: document.getElementById("gqManagedClisList"),
   pending: document.getElementById("gqPending"),
 };
+
+/** Installable CLI keys for the managed-CLIs checkboxes (catalog fallback). */
+const GQ_FALLBACK_CLIS = [
+  { key: "claude", name: "Claude Code" },
+  { key: "codex", name: "OpenAI Codex" },
+  { key: "deepseek", name: "DeepSeek" },
+  { key: "glm", name: "GLM" },
+  { key: "kimi", name: "Kimi" },
+  { key: "qwen", name: "Qwen" },
+  { key: "grok", name: "Grok" },
+  { key: "codebuddy", name: "CodeBuddy" },
+  { key: "gemini", name: "Gemini" },
+  { key: "minimax", name: "MiniMax" },
+  { key: "qoder", name: "Qoder" },
+];
+
+const GQ_POOL_TYPES = ["UNALLOCATED", "FLOAT_POOL", "RECON_RESERVE"];
+
+let gqCatalogClis = null;
+let gqDefaultFloat = 100000;
+
+async function gqEnsureCatalogClis() {
+  if (gqCatalogClis) return gqCatalogClis;
+  try {
+    const res = await fetch("/api/v1/providers/catalog").then(r => r.json());
+    const rows = (res && res.data) || [];
+    const list = (Array.isArray(rows) ? rows : [])
+      .filter(e => e && e.installable && e.key)
+      .map(e => ({ key: e.key, name: e.name || e.key }));
+    gqCatalogClis = list.length ? list : GQ_FALLBACK_CLIS;
+  } catch (_) {
+    gqCatalogClis = GQ_FALLBACK_CLIS;
+  }
+  return gqCatalogClis;
+}
+
+function gqRenderManagedClis(selected) {
+  if (!gqEl.managedList) return;
+  const set = new Set((selected || []).map(s => String(s).toLowerCase()));
+  gqEnsureCatalogClis().then(clis => {
+    gqEl.managedList.replaceChildren();
+    for (const c of clis) {
+      const id = "gqCli-" + c.key;
+      const label = document.createElement("label");
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.id = id;
+      cb.value = c.key;
+      cb.checked = set.has(c.key.toLowerCase());
+      label.append(cb, document.createTextNode(c.name || c.key));
+      gqEl.managedList.appendChild(label);
+    }
+  });
+}
+
+function gqSelectedManagedClis() {
+  if (!gqEl.managedList) return [];
+  return [...gqEl.managedList.querySelectorAll('input[type="checkbox"]:checked')]
+    .map(el => el.value);
+}
 
 const gqNum = n => Number(n || 0).toLocaleString();
 const gqShort = n => n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + "M"
@@ -149,12 +219,14 @@ function gqRenderPeople(rows) {
     pick.textContent = L("gq.useInForm");
     pick.addEventListener("click", () => {
       gqEl.allocUser.value = user.id;
+      if (bal && gqEl.allocFloat) gqEl.allocFloat.value = bal.floatAllowance || "";
       gqEl.allocAmount.focus();
     });
     act.appendChild(pick);
     tr.append(
       name,
       cell(bal ? bal.baseQuota : 0),
+      cell(bal ? bal.floatAllowance : 0),
       cell(bal ? bal.available : 0),
       cell(bal ? bal.reserved : 0),
       cell(bal ? bal.settled : 0),
@@ -199,6 +271,15 @@ function gqRenderPending(attempts) {
   });
 }
 
+async function gqLoadPoolMetric(type, period) {
+  try {
+    const pool = await api.gwPool(type, period);
+    return gqShort(pool.available);
+  } catch (_) {
+    return "—";
+  }
+}
+
 async function gqLoad() {
   if (!gqEl.poolCards) return;
   if (!gqEl.period.value) gqEl.period.value = gqCurrentPeriod();
@@ -206,18 +287,15 @@ async function gqLoad() {
   const users = await gqEnsureUsers();
   gqFillUserSelect(users);
 
-  gqEl.poolCards.replaceChildren();
-  let poolAvail = "—";
-  let poolReserved = "—";
-  try {
-    const pool = await api.gwPool("UNALLOCATED", period);
-    poolAvail = gqShort(pool.available);
-    poolReserved = gqShort(pool.reserved || 0);
-    if (!gqEl.poolAmount.value) gqEl.poolAmount.placeholder = String(pool.available || "");
-  } catch (_) { /* pool not seeded yet */ }
-  gqEl.poolCards.append(
-    gqMetric(poolAvail, L("gq.poolAvailable")),
-    gqMetric(poolReserved, L("gw.reserved")));
+  const [unalloc, floatPool, recon] = await Promise.all([
+    gqLoadPoolMetric("UNALLOCATED", period),
+    gqLoadPoolMetric("FLOAT_POOL", period),
+    gqLoadPoolMetric("RECON_RESERVE", period),
+  ]);
+  gqEl.poolCards.replaceChildren(
+    gqMetric(unalloc, L("gq.poolAvailable")),
+    gqMetric(floatPool, L("gq.poolFloat")),
+    gqMetric(recon, L("gq.poolRecon")));
 
   let balances = [];
   try {
@@ -233,9 +311,17 @@ async function gqLoad() {
       gqEl.policyAlert.value = pol.pendingAlertAfterHours;
       gqEl.policyTakeover.value = pol.pendingCompanyTakeoverAfterBusinessDays;
       gqEl.policyReserve.value = pol.reconReserveTargetTokens;
+      gqDefaultFloat = Number(pol.defaultFloatAllowance) || 0;
+      if (gqEl.policyFloat) gqEl.policyFloat.value = gqDefaultFloat;
       gqEl.policyReport.value = pol.reportMode || "LEGACY";
+      gqRenderManagedClis(pol.managedClis || []);
+      if (gqEl.allocFloat && !gqEl.allocFloat.value) {
+        gqEl.allocFloat.placeholder = String(gqDefaultFloat);
+      }
     }
-  } catch (_) { /* ignore */ }
+  } catch (_) {
+    gqRenderManagedClis([]);
+  }
 
   try {
     const page = await api.gwPending(period);
@@ -246,9 +332,11 @@ async function gqLoad() {
 async function gqSubmitPool(e) {
   e.preventDefault();
   const amount = Number(gqEl.poolAmount.value);
+  const type = (gqEl.poolType && gqEl.poolType.value) || "UNALLOCATED";
+  if (!GQ_POOL_TYPES.includes(type)) { showToast(L("gw.badAmount"), true); return; }
   if (!Number.isFinite(amount) || amount < 0) { showToast(L("gw.badAmount"), true); return; }
   try {
-    await api.gwPutPool({ type: "UNALLOCATED", period: gqSelectedPeriod(), available: amount });
+    await api.gwPutPool({ type, period: gqSelectedPeriod(), available: amount });
     showToast(L("gw.poolSeeded"), false);
     gqEl.poolAmount.value = "";
     gqLoad();
@@ -260,13 +348,19 @@ async function gqSubmitAlloc(e) {
   const userId = (gqEl.allocUser.value || "").trim();
   const amount = Number(gqEl.allocAmount.value);
   if (!userId || !Number.isFinite(amount) || amount <= 0) { showToast(L("gw.badAmount"), true); return; }
+  const body = {
+    operationId: gqOpId("alloc"),
+    period: gqSelectedPeriod(),
+    userId,
+    amount,
+  };
+  const rawF = gqEl.allocFloat && gqEl.allocFloat.value !== "" ? Number(gqEl.allocFloat.value) : null;
+  if (rawF != null) {
+    if (!Number.isFinite(rawF) || rawF < 0) { showToast(L("gw.badAmount"), true); return; }
+    body.floatAllowance = rawF;
+  }
   try {
-    await api.gwAllocate({
-      operationId: gqOpId("alloc"),
-      period: gqSelectedPeriod(),
-      userId,
-      amount,
-    });
+    await api.gwAllocate(body);
     gqEl.allocAmount.value = "";
     showToast(L("gw.allocated"), false);
     gqLoad();
@@ -290,6 +384,27 @@ async function gqSubmitReclaim() {
   } catch (err) { showToast(err.message, true); }
 }
 
+async function gqSubmitSetFloat() {
+  const userId = (gqEl.allocUser.value || "").trim();
+  const raw = gqEl.allocFloat ? gqEl.allocFloat.value : "";
+  const f = raw === "" ? gqDefaultFloat : Number(raw);
+  if (!userId || !Number.isFinite(f) || f < 0) { showToast(L("gw.badAmount"), true); return; }
+  try {
+    await api.gwSetFloat({ period: gqSelectedPeriod(), userId, floatAllowance: f });
+    showToast(L("gq.floatSet"), false);
+    gqLoad();
+  } catch (err) { showToast(err.message, true); }
+}
+
+async function gqApplyFloatDefaults() {
+  try {
+    const res = await api.gwApplyFloatDefaults({ period: gqSelectedPeriod() });
+    const n = (res && res.updated) != null ? res.updated : 0;
+    showToast(L("gq.floatApplied").replace("{n}", String(n)), false);
+    gqLoad();
+  } catch (err) { showToast(err.message, true); }
+}
+
 async function gqSubmitPolicy(e) {
   e.preventDefault();
   try {
@@ -297,7 +412,9 @@ async function gqSubmitPolicy(e) {
       pendingAlertAfterHours: Number(gqEl.policyAlert.value),
       pendingCompanyTakeoverAfterBusinessDays: Number(gqEl.policyTakeover.value),
       reconReserveTargetTokens: Number(gqEl.policyReserve.value),
+      defaultFloatAllowance: Number(gqEl.policyFloat ? gqEl.policyFloat.value : gqDefaultFloat),
       reportMode: gqEl.policyReport.value,
+      managedClis: gqSelectedManagedClis(),
     });
     showToast(L("gw.policySaved"), false);
     gqLoad();
@@ -307,6 +424,8 @@ async function gqSubmitPolicy(e) {
 if (gqEl.poolForm) gqEl.poolForm.addEventListener("submit", gqSubmitPool);
 if (gqEl.allocForm) gqEl.allocForm.addEventListener("submit", gqSubmitAlloc);
 if (gqEl.reclaimBtn) gqEl.reclaimBtn.addEventListener("click", gqSubmitReclaim);
+if (gqEl.setFloatBtn) gqEl.setFloatBtn.addEventListener("click", gqSubmitSetFloat);
+if (gqEl.applyFloatBtn) gqEl.applyFloatBtn.addEventListener("click", gqApplyFloatDefaults);
 if (gqEl.policyForm) gqEl.policyForm.addEventListener("submit", gqSubmitPolicy);
 if (gqEl.refresh) gqEl.refresh.addEventListener("click", () => gqLoad());
 if (gqEl.period) gqEl.period.addEventListener("change", () => gqLoad());

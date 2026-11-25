@@ -203,4 +203,17 @@ class CredentialServiceTest {
         ProviderCredential checked = svc.check(pool.find(added.id()).orElseThrow());
         assertThat(checked.status()).isEqualTo(ProviderCredential.OK);
     }
+
+    @Test
+    void vendorKeyCheckWithNoModelListDoesNotNpe() {
+        InMemoryPool pool = new InMemoryPool();
+        ModelProviderStore providers = mock(ModelProviderStore.class);
+        when(providers.findByKey("deepseek")).thenReturn(Optional.empty());
+        CredentialService svc = new CredentialService(pool, providers,
+                new SecretCipher("", tmp.resolve("secret.key").toString()), new FakeProbe(tmp), null);
+        CredentialDto added = svc.add("deepseek",
+                new CredentialRequests.Save("ds", "", "sk-deepseek-test-000001", true, null));
+        ProviderCredential checked = svc.check(pool.find(added.id()).orElseThrow());
+        assertThat(checked.status()).isEqualTo(ProviderCredential.OK);
+    }
 }

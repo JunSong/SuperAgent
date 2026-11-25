@@ -126,8 +126,8 @@ public class CredentialService {
             int next = store.list(providerKey).stream().mapToInt(ProviderCredential::priority).max().orElse(0) + 1;
             Instant now = Instant.now();
             store.save(new ProviderCredential(UUID.randomUUID().toString(), providerKey, label("本机：" + f.where(), next),
-                    f.baseUrl(), cipher.encrypt(f.apiKey()), f.bearer(), next, true, ProviderCredential.UNKNOWN, null,
-                    null, now, now, ProviderCredential.MACHINE, hash));
+                    baseUrl(providerKey, f.baseUrl()), cipher.encrypt(f.apiKey()), f.bearer(), next, true,
+                    ProviderCredential.UNKNOWN, null, null, now, now, ProviderCredential.MACHINE, hash));
             added++;
             log.info("{}: imported the machine's key from {}", providerKey, f.where());
         }
@@ -242,8 +242,11 @@ public class CredentialService {
     }
 
     private RunCredential toRun(ProviderCredential c) {
-        return new RunCredential(c.id(), c.baseUrl() != null ? c.baseUrl() : defaultBaseUrl(c.providerKey()),
-                cipher.decrypt(c.keyCipher()), c.bearer());
+        String base = c.baseUrl() != null ? c.baseUrl() : defaultBaseUrl(c.providerKey());
+        if ("deepseek".equals(c.providerKey()) && base != null) {
+            base = ApiAccess.normalizeDeepseekAnthropicBase(base);
+        }
+        return new RunCredential(c.id(), base, cipher.decrypt(c.keyCipher()), c.bearer());
     }
 
     // --- checking ---
@@ -289,7 +292,8 @@ public class CredentialService {
             IOException failure = null;
             boolean interrupted = false;
             // A vendor needs no model: its key proves itself against the endpoint's model list.
-            List<String> tries = candidates.isEmpty() ? java.util.List.of((String) null) : candidates;
+            // List.of(null) throws; Arrays.asList allows a single null stand-in for "no model id".
+            List<String> tries = candidates.isEmpty() ? java.util.Arrays.asList((String) null) : candidates;
             for (String model : tries) {
                 try {
                     probe.checkKey(c.providerKey(), model, toRun(c));
@@ -404,7 +408,7 @@ public class CredentialService {
         int next = store.list(providerKey).stream().mapToInt(ProviderCredential::priority).max().orElse(0) + 1;
         Instant now = Instant.now();
         ProviderCredential c = new ProviderCredential(UUID.randomUUID().toString(), providerKey, label(req.label(), next),
-                baseUrl(req.baseUrl()), cipher.encrypt(key), bearer(providerKey, req.bearer()), next,
+                baseUrl(providerKey, req.baseUrl()), cipher.encrypt(key), bearer(providerKey, req.bearer()), next,
                 req.enabled() == null || req.enabled(), ProviderCredential.UNKNOWN, null, null, now, now,
                 ProviderCredential.CONSOLE, hash);
         store.save(c);
@@ -418,7 +422,7 @@ public class CredentialService {
         String key = req.apiKey() == null ? "" : req.apiKey().strip();
         ProviderCredential updated = new ProviderCredential(c.id(), providerKey,
                 req.label() == null ? c.label() : label(req.label(), c.priority()),
-                req.baseUrl() == null ? c.baseUrl() : baseUrl(req.baseUrl()),
+                req.baseUrl() == null ? c.baseUrl() : baseUrl(providerKey, req.baseUrl()),
                 key.isEmpty() ? c.keyCipher() : cipher.encrypt(key),
                 req.bearer() == null ? c.bearer() : bearer(providerKey, req.bearer()), c.priority(),
                 req.enabled() == null ? c.enabled() : req.enabled(),
@@ -493,6 +497,14 @@ public class CredentialService {
 
     /** A plain http(s) URL or nothing (the vendor's default). */
     static String baseUrl(String url) {
+        return baseUrl(null, url);
+    }
+
+    /**
+     * A plain http(s) URL or nothing (the vendor's default). DeepSeek: strip OpenAI chat/v1 suffixes and keep the
+     * Anthropic-compatible base the harness uses, so {@code /models} is not built on {@code …/chat/completions}.
+     */
+    static String baseUrl(String providerKey, String url) {
         String u = url == null ? "" : url.strip().replaceAll("/+$", "");
         if (u.isEmpty()) {
             return null;
@@ -505,6 +517,9 @@ public class CredentialService {
         }
         if (!("https".equals(uri.getScheme()) || "http".equals(uri.getScheme())) || uri.getHost() == null) {
             throw new IllegalArgumentException("访问地址要以 http:// 或 https:// 开头：" + u);
+        }
+        if ("deepseek".equals(providerKey)) {
+            return ApiAccess.normalizeDeepseekAnthropicBase(u);
         }
         return u;
     }

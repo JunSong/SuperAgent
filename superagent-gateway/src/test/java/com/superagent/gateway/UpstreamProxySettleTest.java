@@ -99,7 +99,7 @@ class UpstreamProxySettleTest {
                 () -> grants.issue("t1", "r1", "alice", "deepseek", "m", Duration.ofMinutes(5)));
 
         int status = proxy.forward(grants.require("Bearer " + lease.token()), "openai", "/v1/chat/completions",
-                "POST", Map.of(), reqBody, new ByteArrayOutputStream(), c -> {
+                "POST", Map.of(), reqBody, new ByteArrayOutputStream(), (c, ct) -> {
                 });
         assertThat(status).isEqualTo(200);
         assertThat(ledger.lastSettledA).isEqualTo(15);
@@ -130,7 +130,7 @@ class UpstreamProxySettleTest {
                 () -> grants.issue("t2", "r2", "alice", "deepseek", "m", Duration.ofMinutes(5)));
 
         proxy.forward(grants.require("Bearer " + lease.token()), "openai", "/v1/no-usage",
-                "POST", Map.of(), reqBody, new ByteArrayOutputStream(), c -> {
+                "POST", Map.of(), reqBody, new ByteArrayOutputStream(), (c, ct) -> {
                 });
         assertThat(ledger.lastSettledA).isEqualTo(-1);
         assertThat(ledger.pending).isTrue();
@@ -253,6 +253,16 @@ class UpstreamProxySettleTest {
         @Override
         public GatewayAccount allocate(String operationId, String period, String toUserId, long amount, String actorUserId) {
             throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public GatewayAccount setFloatAllowance(String period, String userId, long floatAllowance) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public int applyDefaultFloat(String period, long floatAllowance) {
+            return 0;
         }
 
         @Override

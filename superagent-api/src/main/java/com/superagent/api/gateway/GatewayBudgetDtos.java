@@ -36,10 +36,24 @@ public final class GatewayBudgetDtos {
             String reason) {
     }
 
-    public record AllocateRequest(String operationId, String period, String userId, long amount) {
+    /**
+     * @param floatAllowance optional; null → apply company default when the employee still has F=0
+     */
+    public record AllocateRequest(String operationId, String period, String userId, long amount, Long floatAllowance) {
     }
 
     public record ReclaimRequest(String operationId, String period, String userId, long amount) {
+    }
+
+    /** Admin sets one employee's float allowance F. */
+    public record SetFloatRequest(String period, String userId, long floatAllowance) {
+    }
+
+    /** Admin applies company default F to every employee in the period with F=0. */
+    public record ApplyFloatDefaultsRequest(String period) {
+    }
+
+    public record ApplyFloatDefaultsResult(int updated, long floatAllowance) {
     }
 
     public record TransferRequest(String operationId, String period, String toUserId, long amount) {
@@ -87,19 +101,24 @@ public final class GatewayBudgetDtos {
 
     /**
      * Company gateway policy. Null fields on update keep the current value.
-     * Defaults: alert 1h, takeover 2 business days, recon reserve target 500k, reportMode LEGACY.
+     * Defaults: alert 1h, takeover 2 business days, recon reserve target 500k, float F 100k,
+     * reportMode LEGACY, managedClis empty (metering off until the admin enables CLIs).
      */
     public record Policy(
             int pendingAlertAfterHours,
             int pendingCompanyTakeoverAfterBusinessDays,
             long reconReserveTargetTokens,
-            String reportMode) {
+            long defaultFloatAllowance,
+            String reportMode,
+            List<String> managedClis) {
     }
 
     public record PolicyUpdate(
             Integer pendingAlertAfterHours,
             Integer pendingCompanyTakeoverAfterBusinessDays,
             Long reconReserveTargetTokens,
-            String reportMode) {
+            Long defaultFloatAllowance,
+            String reportMode,
+            List<String> managedClis) {
     }
 }

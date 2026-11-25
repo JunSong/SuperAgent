@@ -14,7 +14,7 @@ import java.util.UUID;
 
 /**
  * Builds the {@link RunCredential} a CLI process should see: either the legacy company Key, or a gateway
- * base URL + opaque run token when the CLI is on {@code superagent.gateway.managed-clis}.
+ * base URL + opaque run token when the CLI is on the company's managed-CLI list (admin Gateway policy).
  */
 @Component
 public class ManagedRunFactory {

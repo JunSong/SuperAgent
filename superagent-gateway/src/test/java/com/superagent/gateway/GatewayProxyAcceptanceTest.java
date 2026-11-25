@@ -95,14 +95,14 @@ class GatewayProxyAcceptanceTest {
         ByteArrayOutputStream aliceOut = new ByteArrayOutputStream();
         assertThat(proxy.forward(grants.require("Bearer " + alice.token()), "anthropic", "/v1/messages",
                 "POST", java.util.Map.of(), "{\"model\":\"deepseek-chat\"}".getBytes(StandardCharsets.UTF_8),
-                aliceOut, code -> {
+                aliceOut, (code, ct) -> {
                 })).isEqualTo(200);
         assertThat(aliceOut.toString(StandardCharsets.UTF_8)).contains("hello");
 
         ByteArrayOutputStream bobOut = new ByteArrayOutputStream();
         assertThat(proxy.forward(grants.require("Bearer " + bob.token()), "anthropic", "/v1/messages",
                 "POST", java.util.Map.of(), "{\"model\":\"deepseek-chat\"}".getBytes(StandardCharsets.UTF_8),
-                bobOut, code -> {
+                bobOut, (code, ct) -> {
                 })).isEqualTo(200);
 
         assertThat(stubHits.get()).isEqualTo(2);
@@ -173,7 +173,7 @@ class GatewayProxyAcceptanceTest {
                         }
                     };
                     proxy.forward(grants.require("Bearer " + lease.token()), "anthropic", "/v1/messages",
-                            "POST", java.util.Map.of(), "{}".getBytes(StandardCharsets.UTF_8), tee, c -> {
+                            "POST", java.util.Map.of(), "{}".getBytes(StandardCharsets.UTF_8), tee, (c, ct) -> {
                             });
                 } catch (Exception e) {
                     throw new RuntimeException(e);

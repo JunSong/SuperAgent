@@ -89,6 +89,24 @@ class GatewayBudgetOpsTest {
                 assertThat(ledger.findEmployee(PERIOD, "carol")).isEmpty());
     }
 
+    @Test
+    void setAndApplyDefaultFloat() {
+        JdbcGatewayMetering ledger = newLedger();
+        ledger.putPool(PERIOD, GatewayAccountType.UNALLOCATED, 100);
+        ledger.allocate("f1", PERIOD, "erin", 40, "admin");
+        ledger.allocate("f2", PERIOD, "frank", 40, "admin");
+        assertThat(ledger.findEmployee(PERIOD, "erin")).hasValueSatisfying(a -> assertThat(a.floatAllowance()).isZero());
+
+        ledger.setFloatAllowance(PERIOD, "erin", 100_000);
+        assertThat(ledger.findEmployee(PERIOD, "erin")).hasValueSatisfying(a ->
+                assertThat(a.floatAllowance()).isEqualTo(100_000));
+
+        assertThat(ledger.applyDefaultFloat(PERIOD, 100_000)).isEqualTo(1); // frank only
+        assertThat(ledger.findEmployee(PERIOD, "frank")).hasValueSatisfying(a ->
+                assertThat(a.floatAllowance()).isEqualTo(100_000));
+        assertThat(ledger.applyDefaultFloat(PERIOD, 100_000)).isZero();
+    }
+
     private static JdbcGatewayMetering newLedger() {
         return new JdbcGatewayMetering(new JdbcTemplate(new DriverManagerDataSource(
                 "jdbc:h2:mem:gw-budget-" + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "")));

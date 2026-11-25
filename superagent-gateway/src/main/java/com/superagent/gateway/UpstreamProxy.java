@@ -39,6 +39,13 @@ public class UpstreamProxy {
     private static final Set<String> HOP_BY_HOP = Set.of(
             "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
             "te", "trailers", "transfer-encoding", "upgrade", "host", "content-length");
+    /**
+     * Never ask upstream for compressed bodies: {@link HttpClient} {@code ofInputStream()} does not decode
+     * Content-Encoding, and we must not pass gzip bytes to the CLI as if they were SSE text
+     * (dsh then reports "stream ended before message_stop").
+     */
+    private static final Set<String> STRIP_REQUEST = Set.of(
+            "authorization", "x-api-key", "x-mcp-token", "accept-encoding");
 
     private final CredentialService credentials;
     private final HttpClient http;
@@ -79,6 +86,7 @@ public class UpstreamProxy {
      * @param requestHeaders inbound headers (auth stripped by caller)
      * @param body     full request body (bounded by the controller)
      * @param out      response body stream to the CLI
+     * @param onResponseHeaders status + upstream Content-Type (nullable type)
      * @return upstream status code
      */
     public int forward(
@@ -89,7 +97,7 @@ public class UpstreamProxy {
             java.util.Map<String, String> requestHeaders,
             byte[] body,
             OutputStream out,
-            java.util.function.IntConsumer onResponseHeaders) throws IOException, InterruptedException {
+            java.util.function.BiConsumer<Integer, String> onResponseHeaders) throws IOException, InterruptedException {
         try {
             return TenantContext.call(grant.companyId(), () -> {
                 GatewayAttempt attempt = null;
@@ -125,7 +133,8 @@ public class UpstreamProxy {
 
                     HttpResponse<InputStream> resp = http.send(req.build(), HttpResponse.BodyHandlers.ofInputStream());
                     if (onResponseHeaders != null) {
-                        onResponseHeaders.accept(resp.statusCode());
+                        onResponseHeaders.accept(resp.statusCode(),
+                                resp.headers().firstValue("content-type").orElse(null));
                     }
                     StreamingUsageProbe usageProbe = new StreamingUsageProbe();
                     try (InputStream in = resp.body()) {
@@ -136,6 +145,7 @@ public class UpstreamProxy {
                                 continue;
                             }
                             out.write(buf, 0, n);
+                            out.flush(); // SSE: push each chunk; do not sit on the servlet buffer
                             usageProbe.accept(buf, 0, n);
                         }
                         out.flush();
@@ -259,8 +269,7 @@ public class UpstreamProxy {
                 continue;
             }
             String lower = name.toLowerCase(Locale.ROOT);
-            if (HOP_BY_HOP.contains(lower) || lower.equals("authorization") || lower.equals("x-api-key")
-                    || lower.equals("x-mcp-token")) {
+            if (HOP_BY_HOP.contains(lower) || STRIP_REQUEST.contains(lower)) {
                 continue;
             }
             req.header(name, e.getValue());

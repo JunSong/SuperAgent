@@ -5,12 +5,17 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
  * Conservative R for PR-03 before hard tokenizer evidence (#34 §4): body bytes/4 as input upper bound
- * plus the request's output cap (or a floor). Not a production hard-limit proof — only keeps the ledger moving.
+ * plus a capped slice of the request's output cap (or a floor).
+ *
+ * <p>Harness defaults (e.g. dsh {@code max_tokens=256000}) are vendor ceilings, not expected usage —
+ * reserving the full ceiling would refuse every turn against a normal employee monthly quota.
  */
 final class ReservationEstimator {
 
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final long OUTPUT_FLOOR = 256;
+    /** Practical reserve ceiling for declared max_tokens / max_output_tokens. */
+    static final long OUTPUT_RESERVE_CAP = 32_768;
 
     private ReservationEstimator() {
     }
@@ -23,7 +28,7 @@ final class ReservationEstimator {
                 JsonNode root = JSON.readTree(body);
                 long cap = firstPositive(root, "max_tokens", "max_output_tokens");
                 if (cap > 0) {
-                    output = Math.max(OUTPUT_FLOOR, cap);
+                    output = Math.min(OUTPUT_RESERVE_CAP, Math.max(OUTPUT_FLOOR, cap));
                 }
             } catch (Exception ignored) {
                 // non-JSON: keep floor

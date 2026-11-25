@@ -20,4 +20,11 @@ class ReservationEstimatorTest {
         byte[] body = "{\"max_output_tokens\":1000}".getBytes(StandardCharsets.UTF_8);
         assertThat(ReservationEstimator.estimate(body)).isEqualTo((body.length + 3) / 4 + 1000);
     }
+
+    @Test
+    void capsHarnessSizedMaxTokens() {
+        byte[] body = "{\"max_tokens\":256000,\"messages\":[]}".getBytes(StandardCharsets.UTF_8);
+        assertThat(ReservationEstimator.estimate(body))
+                .isEqualTo((body.length + 3) / 4 + ReservationEstimator.OUTPUT_RESERVE_CAP);
+    }
 }

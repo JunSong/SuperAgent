@@ -3,6 +3,7 @@ package com.superagent.web.auth;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.superagent.platform.user.AccountService;
 import jakarta.servlet.http.HttpServletResponse;
+import jakarta.servlet.DispatcherType;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -57,8 +58,11 @@ public class SecurityConfig {
                 // The Files drawer shows a PDF in a frame of this same site; other sites still can't frame any page.
                 .headers(h -> h.frameOptions(f -> f.sameOrigin()))
                 .authorizeHttpRequests(auth -> auth
+                        // sendError() ERROR-dispatches to /error; without this, Security redirects that to /login (302),
+                        // which breaks CLI clients on the model gateway (they expect the real 4xx).
+                        .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
                         .requestMatchers("/login", "/login.html", "/login.css", "/login.js", "/app.css", "/js/**",
-                                "/superagent-logo.png", "/favicon.ico").permitAll()
+                                "/superagent-logo.png", "/favicon.ico", "/error").permitAll()
                         .requestMatchers("/api/v1/meta", "/actuator/health", "/api/v1/branding/logo").permitAll()
                         .requestMatchers("/api/v1/auth/login", "/api/v1/auth/phone/**").permitAll()
                         // Anyone may register an organization, where the server allows it.

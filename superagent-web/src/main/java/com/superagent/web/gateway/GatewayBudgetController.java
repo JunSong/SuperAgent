@@ -110,8 +110,32 @@ public class GatewayBudgetController {
             @RequestBody GatewayBudgetDtos.AllocateRequest body, Authentication auth) {
         requireBody(body);
         String period = periodOrCurrent(body.period());
-        return ApiResponse.ok(toBalance(
-                metering.allocate(body.operationId(), period, body.userId(), body.amount(), auth.getName())));
+        GatewayAccount allocated = metering.allocate(
+                body.operationId(), period, body.userId(), body.amount(), auth.getName());
+        return ApiResponse.ok(toBalance(applyFloatAfterAllocate(period, body.userId(), body.floatAllowance(), allocated)));
+    }
+
+    @PutMapping(ApiPaths.GATEWAY_ADMIN + "/floats")
+    public ApiResponse<GatewayBudgetDtos.Balance> setFloat(@RequestBody GatewayBudgetDtos.SetFloatRequest body) {
+        requireBody(body);
+        if (body.userId() == null || body.userId().isBlank()) {
+            throw new IllegalArgumentException("userId is required");
+        }
+        if (body.floatAllowance() < 0) {
+            throw new IllegalArgumentException("floatAllowance must be >= 0");
+        }
+        String period = periodOrCurrent(body.period());
+        return ApiResponse.ok(toBalance(metering.setFloatAllowance(period, body.userId(), body.floatAllowance())));
+    }
+
+    @PostMapping(ApiPaths.GATEWAY_ADMIN + "/float-defaults")
+    public ApiResponse<GatewayBudgetDtos.ApplyFloatDefaultsResult> applyFloatDefaults(
+            @RequestBody(required = false) GatewayBudgetDtos.ApplyFloatDefaultsRequest body) {
+        String period = periodOrCurrent(body == null ? null : body.period());
+        long f = policy.get().defaultFloatAllowance();
+        int updated = metering.applyDefaultFloat(period, f);
+        ensureFloatPoolAtLeast(period, f);
+        return ApiResponse.ok(new GatewayBudgetDtos.ApplyFloatDefaultsResult(updated, f));
     }
 
     @PostMapping(ApiPaths.GATEWAY_ADMIN + "/reclaims")
@@ -205,11 +229,51 @@ public class GatewayBudgetController {
                         "reportMode must be LEGACY, SHADOW, or GATEWAY_PRIMARY");
             }
         }
-        return ApiResponse.ok(toPolicy(policy.update(
+        GatewayPolicy updated = policy.update(
                 body.pendingAlertAfterHours(),
                 body.pendingCompanyTakeoverAfterBusinessDays(),
                 body.reconReserveTargetTokens(),
-                mode)));
+                body.defaultFloatAllowance(),
+                mode,
+                body.managedClis());
+        // Keep company float pool usable when a default F is configured (debit only if the pool row exists).
+        ensureFloatPoolAtLeast(GatewayPeriods.current(clock), updated.defaultFloatAllowance());
+        return ApiResponse.ok(toPolicy(updated));
+    }
+
+    /**
+     * After allocate: explicit F wins; otherwise apply company default when the employee still has F=0.
+     */
+    private GatewayAccount applyFloatAfterAllocate(String period, String userId, Long requestedF,
+                                                   GatewayAccount allocated) {
+        if (requestedF != null) {
+            if (requestedF < 0) {
+                throw new IllegalArgumentException("floatAllowance must be >= 0");
+            }
+            GatewayAccount withF = metering.setFloatAllowance(period, userId, requestedF);
+            ensureFloatPoolAtLeast(period, requestedF);
+            return withF;
+        }
+        long def = policy.get().defaultFloatAllowance();
+        if (def > 0 && allocated.floatAllowance() == 0) {
+            GatewayAccount withF = metering.setFloatAllowance(period, userId, def);
+            ensureFloatPoolAtLeast(period, def);
+            return withF;
+        }
+        return allocated;
+    }
+
+    /** Seed or raise FLOAT_POOL so a claim of F does not fail for want of company float cash. */
+    private void ensureFloatPoolAtLeast(String period, long minAvailable) {
+        if (minAvailable <= 0) {
+            return;
+        }
+        long current = metering.findAccount(period, GatewayAccountType.FLOAT_POOL, "")
+                .map(GatewayAccount::available)
+                .orElse(0L);
+        if (current < minAvailable) {
+            metering.putPool(period, GatewayAccountType.FLOAT_POOL, minAvailable);
+        }
     }
 
     private String periodOrCurrent(String period) {
@@ -221,7 +285,9 @@ public class GatewayBudgetController {
                 p.pendingAlertAfterHours(),
                 p.pendingCompanyTakeoverAfterBusinessDays(),
                 p.reconReserveTargetTokens(),
-                p.reportMode().name());
+                p.defaultFloatAllowance(),
+                p.reportMode().name(),
+                p.managedClis());
     }
 
     private static void requireBody(Object body) {

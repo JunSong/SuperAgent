@@ -13,17 +13,17 @@ import java.security.SecureRandom;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Arrays;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Collectors;
+import java.util.function.Predicate;
 
 /**
  * In-memory model-run tokens (same lifecycle idea as MCP grants): issued per CLI process, revoked when the
  * run ends, never shared across companies. Single control-plane JVM only.
+ * Managed-CLI membership comes from company {@link GatewayPolicyService} (admin UI), not process env alone.
  */
 @Component
 public class ModelRunGrants implements ModelRunLeaseService {
@@ -34,32 +34,34 @@ public class ModelRunGrants implements ModelRunLeaseService {
     private final Map<String, ModelRunGrant> byToken = new ConcurrentHashMap<>();
     private final SecureRandom random = new SecureRandom();
     private final Clock clock;
-    private final Set<String> managedClis;
+    private final Predicate<String> managedCheck;
     private final boolean configuredSelfUrl;
     private volatile String selfBase;
 
     @Autowired
     public ModelRunGrants(
-            @Value("${superagent.gateway.managed-clis:}") String managedClis,
+            GatewayPolicyService policy,
             @Value("${superagent.gateway.self-url:}") String selfUrl,
             @Value("${server.port:18080}") int port,
             Clock clock) {
-        this.clock = clock;
-        this.managedClis = Arrays.stream(managedClis.split(","))
-                .map(String::trim)
-                .filter(s -> !s.isEmpty())
-                .map(s -> s.toLowerCase(Locale.ROOT))
-                .collect(Collectors.toUnmodifiableSet());
-        this.configuredSelfUrl = selfUrl != null && !selfUrl.isBlank();
-        this.selfBase = configuredSelfUrl ? trimSlash(selfUrl.trim()) : "http://127.0.0.1:" + port;
+        this(policy::managed, selfUrl, port, clock, selfUrl != null && !selfUrl.isBlank());
     }
 
-    /** Test / explicit wiring. */
+    /** Test / explicit wiring with a fixed managed set. */
     public ModelRunGrants(Set<String> managedClis, String selfBase, Clock clock) {
+        Set<String> fixed = Set.copyOf(managedClis);
         this.clock = clock;
-        this.managedClis = Set.copyOf(managedClis);
+        this.managedCheck = cli -> cli != null && fixed.contains(cli.toLowerCase(Locale.ROOT));
         this.configuredSelfUrl = true;
         this.selfBase = trimSlash(selfBase);
+    }
+
+    private ModelRunGrants(Predicate<String> managedCheck, String selfUrl, int port, Clock clock,
+                           boolean configuredSelfUrl) {
+        this.clock = clock;
+        this.managedCheck = managedCheck;
+        this.configuredSelfUrl = configuredSelfUrl;
+        this.selfBase = configuredSelfUrl ? trimSlash(selfUrl.trim()) : "http://127.0.0.1:" + port;
     }
 
     @EventListener
@@ -71,7 +73,7 @@ public class ModelRunGrants implements ModelRunLeaseService {
 
     @Override
     public boolean managed(String cli) {
-        return cli != null && managedClis.contains(cli.toLowerCase(Locale.ROOT));
+        return managedCheck.test(cli);
     }
 
     @Override

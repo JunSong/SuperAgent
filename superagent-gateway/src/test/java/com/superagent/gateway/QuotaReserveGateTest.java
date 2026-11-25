@@ -227,6 +227,16 @@ class QuotaReserveGateTest {
         }
 
         @Override
+        public GatewayAccount setFloatAllowance(String period, String userId, long floatAllowance) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public int applyDefaultFloat(String period, long floatAllowance) {
+            return 0;
+        }
+
+        @Override
         public GatewayAccount reclaim(String operationId, String period, String fromUserId, long amount, String actorUserId) {
             throw new UnsupportedOperationException();
         }

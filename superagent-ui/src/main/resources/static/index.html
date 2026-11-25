@@ -582,7 +582,7 @@
         <section class="us-section" id="gwQuotaBox" hidden>
           <h3 class="us-section__title" data-i18n="gw.quotaTitle">Model quota</h3>
           <p class="gw-empty" id="gwEmpty" hidden data-i18n="gw.noPersonal">No personal quota this month yet.</p>
-          <div class="stat-cards us-cards" id="gwQuotaCards"></div>
+          <div class="gq-metrics gq-metrics--4" id="gwQuotaCards"></div>
         </section>
         <section class="us-summary">
           <div class="us-hero" id="usHero"></div>
@@ -694,10 +694,15 @@
             <h3 class="us-section__title" data-i18n="gq.poolTitle">Company pool</h3>
             <div class="gq-metrics" id="gqPoolCards"></div>
             <form class="gw-admin__form" id="gqPoolForm">
+              <select id="gqPoolType" aria-label="Pool type">
+                <option value="UNALLOCATED" data-i18n="gq.poolTypeUnallocated">Unallocated</option>
+                <option value="FLOAT_POOL" data-i18n="gq.poolTypeFloat">Float pool</option>
+                <option value="RECON_RESERVE" data-i18n="gq.poolTypeRecon">Recon reserve</option>
+              </select>
               <input type="number" id="gqPoolAmount" min="0" step="1" data-i18n-ph="gw.poolAmount" placeholder="total tokens" required />
-              <button type="submit" class="btn" data-i18n="gw.poolSeed">Set company pool</button>
+              <button type="submit" class="btn" data-i18n="gw.poolSeed">Set pool</button>
             </form>
-            <p class="gw-policy__hint" data-i18n="gq.poolHint">Setting the pool replaces the UNALLOCATED balance for this month. Allocate from it to people below.</p>
+            <p class="gw-policy__hint" data-i18n="gq.poolHint">Sets the chosen company pool for this month. Unallocated is what you assign to people; float pool backs per-person F; recon reserve is the freeze-coverage buffer.</p>
           </section>
           <section class="gq-panel">
             <h3 class="us-section__title" data-i18n="gq.policyTitle">Gateway policy</h3>
@@ -708,35 +713,45 @@
                 <input type="number" id="gqPolicyTakeover" min="1" max="30" step="1" required /></label>
               <label class="gw-policy__field"><span data-i18n="gw.policyReserve">Recon reserve target</span>
                 <input type="number" id="gqPolicyReserve" min="0" step="1" required /></label>
+              <label class="gw-policy__field"><span data-i18n="gw.policyFloat">Default float (F)</span>
+                <input type="number" id="gqPolicyFloat" min="0" step="1" required /></label>
               <label class="gw-policy__field"><span data-i18n="gw.policyReport">Report mode</span>
                 <select id="gqPolicyReport">
                   <option value="LEGACY">LEGACY</option>
                   <option value="SHADOW">SHADOW</option>
                   <option value="GATEWAY_PRIMARY">GATEWAY_PRIMARY</option>
                 </select></label>
+              <fieldset class="gq-managed-clis" id="gqManagedClis">
+                <legend data-i18n="gw.policyManagedClis">Managed CLIs (metering)</legend>
+                <div class="gq-managed-clis__list" id="gqManagedClisList"></div>
+              </fieldset>
               <div class="gq-policy-actions">
                 <button type="submit" class="btn" data-i18n="gw.policySave">Save policy</button>
               </div>
             </form>
-            <p class="gw-policy__hint" data-i18n="gw.policyHint">Defaults: alert 1h, takeover 2 business days, reserve target 500k, reports LEGACY.</p>
+            <p class="gw-policy__hint" data-i18n="gw.policyHint">Defaults: alert 1h, takeover 2 business days, reserve target 500k, float F 100k, reports LEGACY. Enable managed CLIs so chat/task runs reserve and settle tokens. Saving also tops up the float pool to at least F.</p>
             <div class="us-card" id="gqPending" hidden></div>
           </section>
         </div>
         <section class="us-section">
           <div class="us-section__head">
             <h3 class="us-section__title" data-i18n="gq.peopleTitle">People</h3>
+            <button type="button" class="btn btn--sm" id="gqApplyFloatBtn" data-i18n="gq.applyFloatDefaults">Apply default float to F=0</button>
           </div>
           <form class="gw-admin__form" id="gqAllocForm">
             <select id="gqAllocUser" required aria-label="Person"></select>
             <input type="number" id="gqAllocAmount" min="1" step="1" data-i18n-ph="gw.amount" placeholder="tokens" required />
+            <input type="number" id="gqAllocFloat" min="0" step="1" data-i18n-ph="gq.floatPh" placeholder="float F (optional)" />
             <button type="submit" class="btn btn--primary" data-i18n="gw.allocate">Allocate</button>
             <button type="button" class="btn" id="gqReclaimBtn" data-i18n="gq.reclaim">Reclaim</button>
+            <button type="button" class="btn" id="gqSetFloatBtn" data-i18n="gq.setFloat">Set float</button>
           </form>
           <div class="mt-table-wrap">
             <table class="ctable mt-table gq-table">
               <thead><tr>
                 <th data-i18n="us.colPerson">Person</th>
                 <th class="num" data-i18n="gw.base">Base quota</th>
+                <th class="num" data-i18n="gw.float">Float F</th>
                 <th class="num" data-i18n="gw.available">Available</th>
                 <th class="num" data-i18n="gw.reserved">Reserved</th>
                 <th class="num" data-i18n="gw.settled">Settled</th>

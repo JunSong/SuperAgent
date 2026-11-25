@@ -71,6 +71,19 @@ public interface GatewayMetering {
      */
     GatewayAccount allocate(String operationId, String period, String toUserId, long amount, String actorUserId);
 
+    /**
+     * Admin: set employee float allowance F (0 disables float for that person).
+     * Does not change available / base quota.
+     */
+    GatewayAccount setFloatAllowance(String period, String userId, long floatAllowance);
+
+    /**
+     * Admin: set F={@code floatAllowance} on every employee in the period whose current F is 0.
+     *
+     * @return how many accounts were updated
+     */
+    int applyDefaultFloat(String period, long floatAllowance);
+
     /** Admin: move {@code amount} from employee available → UNALLOCATED (decreases B). */
     GatewayAccount reclaim(String operationId, String period, String fromUserId, long amount, String actorUserId);
 

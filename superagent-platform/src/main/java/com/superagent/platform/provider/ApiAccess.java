@@ -32,17 +32,38 @@ record ApiAccess(String base, String key, boolean bearer) {
         if (credential == null) {
             return Optional.empty();
         }
-        return Optional.of(new ApiAccess(trim(credential.baseUrl(), entry.access().defaultBaseUrl()), credential.apiKey(),
-                credential.bearer()));
+        String base = trim(credential.baseUrl(), entry.access().defaultBaseUrl());
+        if ("deepseek".equals(entry.key())) {
+            // People often paste the OpenAI chat URL; DeepSeek's harness speaks Anthropic beside /models on the root.
+            base = normalizeDeepseekAnthropicBase(base);
+        }
+        return Optional.of(new ApiAccess(base, credential.apiKey(), credential.bearer()));
     }
 
     /** Where this endpoint lists models: its OpenAI-style API, which the Anthropic-compatible vendors keep beside it. */
     String modelsUrl(String providerKey) {
         return switch (providerKey) {
-            case "deepseek" -> base.replaceFirst("/anthropic$", "") + "/models";
+            case "deepseek" -> deepseekApiRoot(base) + "/models";
             case "glm" -> base.replaceFirst("/api/anthropic$", "/api/paas/v4") + "/models";
             default -> base + "/models";
         };
+    }
+
+    /**
+     * DeepSeek's OpenAI root ({@code https://api.deepseek.com}). Strips {@code /anthropic}, {@code /v1}, and
+     * {@code /chat/completions} that people paste as the "endpoint".
+     */
+    static String deepseekApiRoot(String base) {
+        String b = blank(base) ? "https://api.deepseek.com" : base.strip().replaceAll("/+$", "");
+        b = b.replaceFirst("/anthropic$", "");
+        b = b.replaceFirst("/chat/completions$", "");
+        b = b.replaceFirst("/v1$", "");
+        return b;
+    }
+
+    /** Anthropic-compatible base the DeepSeek harness uses ({@code …/anthropic}). */
+    static String normalizeDeepseekAnthropicBase(String base) {
+        return deepseekApiRoot(base) + "/anthropic";
     }
 
     boolean viaGateway() {

@@ -134,12 +134,12 @@ public class Transcriber {
     }
 
     /**
-     * #34 PR-02: media transcription is not yet adapted to the model gateway. When the Codex CLI is on
-     * {@code managed-clis}, refuse before any vendor call so the company Key never leaves the control plane here.
+     * #34 PR-02: media transcription is not yet adapted to the model gateway. When Codex is on the company's
+     * managed-CLI list, refuse before any vendor call so the company Key never leaves the control plane here.
      */
     private void refuseIfManaged() {
         if (modelRunLeases != null && modelRunLeases.managed(PROVIDER)) {
-            throw new NeedsUserException("语音转写尚未接入模型网关：受管试点下已禁用，请先从 managed-clis 去掉 codex，或等待媒体路径适配");
+            throw new NeedsUserException("语音转写尚未接入模型网关：受管试点下已禁用，请先在额度页关掉 codex，或等待媒体路径适配");
         }
     }
 

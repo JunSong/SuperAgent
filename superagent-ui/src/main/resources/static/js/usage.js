@@ -304,19 +304,24 @@ async function loadGatewayQuota() {
   try { bal = await api.gwBalance(); } catch (_) { bal = null; }
   if (!bal) return;
 
-  const card = (value, label) => {
-    const c = document.createElement("div");
-    c.className = "stat-card";
-    c.innerHTML = '<span class="stat-card__value"></span><span class="stat-card__label"></span>';
-    c.querySelector(".stat-card__value").textContent = value;
-    c.querySelector(".stat-card__label").textContent = label;
-    return c;
+  const metric = (value, label) => {
+    const m = document.createElement("div");
+    m.className = "gq-metric";
+    const v = document.createElement("span");
+    v.className = "gq-metric__value";
+    v.textContent = value;
+    const l = document.createElement("span");
+    l.className = "gq-metric__label";
+    l.textContent = label;
+    m.append(v, l);
+    return m;
   };
 
   usEl.gwBox.hidden = false;
   usEl.gwCards.append(
-    card(usShort(bal.available), L("gw.available")),
-    card(usShort(bal.reserved), L("gw.reserved")),
-    card(usShort(bal.settled), L("gw.settled")),
-    card(usShort(bal.baseQuota), L("gw.base")));
+    metric(usShort(bal.available), L("gw.available")),
+    metric(usShort(bal.reserved), L("gw.reserved")),
+    metric(usShort(bal.settled), L("gw.settled")),
+    metric(usShort(bal.baseQuota), L("gw.base")),
+    metric(usShort(bal.floatAllowance || 0), L("gw.float")));
 }

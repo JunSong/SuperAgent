@@ -50,8 +50,8 @@ superagent:
       max-users: ${SUPERAGENT_QUOTA_MAX_USERS:0}
       max-running-tasks: ${SUPERAGENT_QUOTA_MAX_RUNNING_TASKS:0}
       monthly-tokens: ${SUPERAGENT_QUOTA_MONTHLY_TOKENS:0}
-  # Model gateway (#34): comma-separated CLI keys that must call /api/v1/gateway with a run token (no company Key in the CLI).
-  # Empty = legacy (CLI still gets the decrypted Key). Example: deepseek
+  # Model gateway (#34): bootstrap default for managed CLIs until an admin saves Gateway policy in the UI
+  # (company setting gateway.managed-clis). Empty = metering off / legacy Key in the CLI. Example: deepseek
   gateway:
     managed-clis: ${SUPERAGENT_GATEWAY_MANAGED_CLIS:}
     # self-url: ${SUPERAGENT_GATEWAY_SELF_URL:}   # optional; defaults to http://127.0.0.1:<server.port>

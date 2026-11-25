@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.Enumeration;
 import java.util.LinkedHashMap;
 import java.util.Locale;
@@ -56,19 +57,19 @@ public class GatewayController {
             HttpServletResponse response) throws IOException {
         String proto = protocol == null ? "" : protocol.toLowerCase(Locale.ROOT);
         if (!PROTOCOLS.contains(proto)) {
-            response.sendError(HttpServletResponse.SC_NOT_FOUND, "unknown protocol");
+            writeError(response, HttpServletResponse.SC_NOT_FOUND, "unknown protocol");
             return;
         }
         ModelRunGrant grant;
         try {
             grant = grants.require(tokenHeader(request));
         } catch (ModelRunGrants.UnauthorizedGatewayException e) {
-            response.sendError(HttpServletResponse.SC_UNAUTHORIZED, e.getMessage());
+            writeError(response, HttpServletResponse.SC_UNAUTHORIZED, e.getMessage());
             return;
         }
         String expected = ModelRunGrants.protocolFor(grant.cli());
         if (!proto.equals(expected)) {
-            response.sendError(HttpServletResponse.SC_FORBIDDEN, "protocol mismatch for cli " + grant.cli());
+            writeError(response, HttpServletResponse.SC_FORBIDDEN, "protocol mismatch for cli " + grant.cli());
             return;
         }
 
@@ -77,7 +78,7 @@ public class GatewayController {
         try {
             body = readBody(request);
         } catch (BodyTooLargeException e) {
-            response.sendError(HttpServletResponse.SC_REQUEST_ENTITY_TOO_LARGE, "request body too large");
+            writeError(response, HttpServletResponse.SC_REQUEST_ENTITY_TOO_LARGE, "request body too large");
             return;
         }
 
@@ -86,43 +87,92 @@ public class GatewayController {
         // Status may be overwritten once upstream responds; default keeps streaming clients happier if we fail early.
         try {
             int status = proxy.forward(grant, proto, suffix, request.getMethod(), headers, body,
-                    response.getOutputStream(), code -> {
+                    response.getOutputStream(), (code, contentType) -> {
                         response.setStatus(code);
-                        if (response.getContentType() == null) {
+                        if (contentType != null && !contentType.isBlank()) {
+                            response.setContentType(contentType);
+                        } else if (response.getContentType() == null) {
                             response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+                        }
+                        try {
+                            response.flushBuffer();
+                        } catch (IOException ignored) {
+                            // best-effort: commit headers so SSE can start flowing
                         }
                     });
             log.debug("gateway done run={} status={}", grant.runId(), status);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             if (!response.isCommitted()) {
-                response.sendError(HttpServletResponse.SC_BAD_GATEWAY, "upstream interrupted");
+                writeError(response, HttpServletResponse.SC_BAD_GATEWAY, "upstream interrupted");
             }
         } catch (GatewayQuotaBusyException e) {
             // #34: QUOTA_BUSY — retryable; keep 409 distinct from exhausted/insufficient.
             if (!response.isCommitted()) {
-                response.sendError(HttpServletResponse.SC_CONFLICT, e.getMessage());
+                writeError(response, HttpServletResponse.SC_CONFLICT, e.getMessage());
             }
         } catch (GatewayQuotaInsufficientException | GatewayQuotaExhaustedException e) {
             // #34: QUOTA_* — no outbound.
             if (!response.isCommitted()) {
-                response.sendError(HttpServletResponse.SC_FORBIDDEN, e.getMessage());
+                writeError(response, HttpServletResponse.SC_FORBIDDEN, e.getMessage());
             }
         } catch (BusyException e) {
             if (!response.isCommitted()) {
-                response.sendError(HttpServletResponse.SC_CONFLICT, e.getMessage());
+                writeError(response, HttpServletResponse.SC_CONFLICT, e.getMessage());
             }
         } catch (ForbiddenException e) {
             if (!response.isCommitted()) {
-                response.sendError(HttpServletResponse.SC_FORBIDDEN, e.getMessage());
+                writeError(response, HttpServletResponse.SC_FORBIDDEN, e.getMessage());
             }
         } catch (RuntimeException | IOException e) {
             log.warn("gateway forward failed run={}: {}", grant.runId(), e.getMessage());
             if (!response.isCommitted()) {
-                response.sendError(HttpServletResponse.SC_BAD_GATEWAY,
+                writeError(response, HttpServletResponse.SC_BAD_GATEWAY,
                         e.getMessage() != null ? e.getMessage() : "upstream failed");
             }
         }
+    }
+
+    /**
+     * Prefer {@code setStatus} over {@code sendError}: the latter triggers an ERROR dispatch to {@code /error},
+     * which Spring Security then redirects to {@code /login} (CLIs see 302 HTML, e.g. "Messages transport failed").
+     * Body is Anthropic-shaped JSON so harnesses surface {@code error.message} instead of a bare status.
+     */
+    static void writeError(HttpServletResponse response, int status, String message) throws IOException {
+        response.resetBuffer();
+        response.setStatus(status);
+        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+        String msg = message == null ? "" : message;
+        String type = status == HttpServletResponse.SC_UNAUTHORIZED ? "authentication_error"
+                : status == HttpServletResponse.SC_FORBIDDEN ? "permission_error"
+                : status == 409 ? "overloaded_error"
+                : "api_error";
+        String json = "{\"type\":\"error\",\"error\":{\"type\":\"" + type + "\",\"message\":"
+                + jsonString(msg) + "}}";
+        response.getOutputStream().write(json.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static String jsonString(String s) {
+        StringBuilder sb = new StringBuilder(s.length() + 8).append('"');
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '"' -> sb.append("\\\"");
+                case '\\' -> sb.append("\\\\");
+                case '\n' -> sb.append("\\n");
+                case '\r' -> sb.append("\\r");
+                case '\t' -> sb.append("\\t");
+                default -> {
+                    if (c < 0x20) {
+                        sb.append(String.format("\\u%04x", (int) c));
+                    } else {
+                        sb.append(c);
+                    }
+                }
+            }
+        }
+        return sb.append('"').toString();
     }
 
     private static String tokenHeader(HttpServletRequest request) {

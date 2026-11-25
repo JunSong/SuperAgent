@@ -491,6 +491,44 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
     }
 
     @Override
+    public GatewayAccount setFloatAllowance(String period, String userId, long floatAllowance) {
+        requirePeriodUser(period, userId);
+        if (floatAllowance < 0) {
+            throw new IllegalArgumentException("floatAllowance must be >= 0");
+        }
+        return tx.execute(status -> {
+            String company = TenantSchema.company();
+            ensureEmployeeRow(company, period, userId);
+            jdbc.update("""
+                    UPDATE gateway_account SET float_allowance = ?
+                    WHERE company_id = ? AND period = ? AND account_type = ? AND owner_id = ?
+                    """,
+                    floatAllowance, company, period, GatewayAccountType.EMPLOYEE.name(), userId);
+            return findEmployee(period, userId).orElseThrow();
+        });
+    }
+
+    @Override
+    public int applyDefaultFloat(String period, long floatAllowance) {
+        if (period == null || period.isBlank()) {
+            throw new IllegalArgumentException("period is required");
+        }
+        if (floatAllowance < 0) {
+            throw new IllegalArgumentException("floatAllowance must be >= 0");
+        }
+        if (floatAllowance == 0) {
+            return 0;
+        }
+        Integer n = tx.execute(status -> jdbc.update("""
+                UPDATE gateway_account SET float_allowance = ?
+                WHERE company_id = ? AND period = ? AND account_type = ?
+                  AND float_allowance = 0
+                """,
+                floatAllowance, TenantSchema.company(), period, GatewayAccountType.EMPLOYEE.name()));
+        return n == null ? 0 : n;
+    }
+
+    @Override
     public GatewayAccount reclaim(String operationId, String period, String fromUserId, long amount, String actorUserId) {
         requireOp(operationId, period, fromUserId, amount);
         return tx.execute(status -> {
