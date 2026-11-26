@@ -1,6 +1,7 @@
 package com.superagent.gateway;
 
 import com.superagent.core.error.ForbiddenException;
+import com.superagent.core.gateway.GatewayInputBoundMode;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
@@ -15,6 +16,7 @@ class ReservationEstimatorTest {
         byte[] body = "{\"model\":\"x\",\"max_tokens\":100,\"messages\":[]}".getBytes(StandardCharsets.UTF_8);
         long r = ReservationEstimator.estimate(body);
         assertThat(r).isEqualTo((body.length + 3) / 4 + 100); // do not raise 100 → 256
+        assertThat(ReservationEstimator.prepare(body).inputBoundMode()).isEqualTo(GatewayInputBoundMode.HEURISTIC);
     }
 
     @Test

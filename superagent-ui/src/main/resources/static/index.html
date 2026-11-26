@@ -724,11 +724,12 @@
                 <legend data-i18n="gw.policyManagedClis">Managed CLIs (metering)</legend>
                 <div class="gq-managed-clis__list" id="gqManagedClisList"></div>
               </fieldset>
+              <p class="gw-policy__hard" id="gqHardQuotaNote" data-i18n="gq.hardQuotaNote">Request-level input bounds are HEURISTIC (soft) for all CLIs. Monthly B/F still applies; hard vendor spend caps require G0 tokenizer evidence — hardQuotaClis stays empty until then.</p>
               <div class="gq-policy-actions">
                 <button type="submit" class="btn" data-i18n="gw.policySave">Save policy</button>
               </div>
             </form>
-            <p class="gw-policy__hint" data-i18n="gw.policyHint">Defaults: alert 1h, takeover 2 business days, reserve target 500k, float F 100k, reports LEGACY. Enable managed CLIs so chat/task runs reserve and settle tokens. Saving also tops up the float pool to at least F.</p>
+            <p class="gw-policy__hint" data-i18n="gw.policyHint">Defaults: alert 1h, takeover 2 business days, reserve target 500k, float F 100k, reports LEGACY. Enable managed CLIs so chat/task runs reserve and settle tokens. Saving also tops up the float pool to at least F. Managed ≠ hard input bound.</p>
             <div class="us-card" id="gqPending" hidden></div>
           </section>
         </div>

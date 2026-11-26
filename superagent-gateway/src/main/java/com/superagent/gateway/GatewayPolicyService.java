@@ -32,6 +32,7 @@ public class GatewayPolicyService implements GatewayReportPolicy {
     static final String DEFAULT_FLOAT = "gateway.float.default-allowance";
     static final String REPORT_MODE = "gateway.report.mode";
     static final String MANAGED_CLIS = "gateway.managed-clis";
+    static final String HARD_QUOTA_CLIS = "gateway.hard-quota-clis";
 
     private final SystemSettingStore store;
     private final List<String> envManagedClis;
@@ -56,25 +57,29 @@ public class GatewayPolicyService implements GatewayReportPolicy {
     public GatewayPolicy get() {
         Map<String, String> all = store.all();
         List<String> managed = all.containsKey(MANAGED_CLIS) ? parseClis(all.get(MANAGED_CLIS)) : envManagedClis;
+        List<String> hard = all.containsKey(HARD_QUOTA_CLIS) ? parseClis(all.get(HARD_QUOTA_CLIS)) : List.of();
         return new GatewayPolicy(
                 intVal(all, PENDING_ALERT_HOURS, GatewayPolicy.DEFAULT_PENDING_ALERT_HOURS, 1, 168),
                 intVal(all, PENDING_TAKEOVER_DAYS, GatewayPolicy.DEFAULT_PENDING_TAKEOVER_BUSINESS_DAYS, 1, 30),
                 longVal(all, RECON_RESERVE_TARGET, GatewayPolicy.DEFAULT_RECON_RESERVE_TARGET_TOKENS, 0, 1_000_000_000L),
                 longVal(all, DEFAULT_FLOAT, GatewayPolicy.DEFAULT_FLOAT_ALLOWANCE, 0, 1_000_000_000L),
                 modeVal(all.get(REPORT_MODE)),
-                managed);
+                managed,
+                hard);
     }
 
     /**
      * Partial update: null fields keep the current value.
-     * {@code managedClis} null keeps; non-null (including empty) replaces the company list.
+     * {@code managedClis} / {@code hardQuotaClis} null keeps; non-null (including empty) replaces.
+     * Non-empty {@code hardQuotaClis} is rejected until a G0-proven input bound exists in this build.
      */
     public GatewayPolicy update(Integer pendingAlertAfterHours,
                                 Integer pendingCompanyTakeoverAfterBusinessDays,
                                 Long reconReserveTargetTokens,
                                 Long defaultFloatAllowance,
                                 GatewayReportMode reportMode,
-                                List<String> managedClis) {
+                                List<String> managedClis,
+                                List<String> hardQuotaClis) {
         GatewayPolicy cur = get();
         int alert = pendingAlertAfterHours == null ? cur.pendingAlertAfterHours()
                 : boundedInt(pendingAlertAfterHours, 1, 168, "pending alert hours");
@@ -86,6 +91,11 @@ public class GatewayPolicyService implements GatewayReportPolicy {
                 : boundedLong(defaultFloatAllowance, 0, 1_000_000_000L, "default float allowance");
         GatewayReportMode mode = reportMode == null ? cur.reportMode() : reportMode;
         List<String> clis = managedClis == null ? cur.managedClis() : normalizeClis(managedClis);
+        List<String> hard = hardQuotaClis == null ? cur.hardQuotaClis() : normalizeClis(hardQuotaClis);
+        if (!hard.isEmpty() && !GatewayPolicy.HARD_INPUT_BOUND_AVAILABLE) {
+            throw new IllegalArgumentException(
+                    "hardQuotaClis cannot be enabled yet: no G0-proven input bound (tokenizer/count) is available");
+        }
 
         store.put(PENDING_ALERT_HOURS, String.valueOf(alert));
         store.put(PENDING_TAKEOVER_DAYS, String.valueOf(days));
@@ -93,6 +103,7 @@ public class GatewayPolicyService implements GatewayReportPolicy {
         store.put(DEFAULT_FLOAT, String.valueOf(floatF));
         store.put(REPORT_MODE, mode.name());
         store.put(MANAGED_CLIS, String.join(",", clis));
+        store.put(HARD_QUOTA_CLIS, String.join(",", hard));
         return get();
     }
 

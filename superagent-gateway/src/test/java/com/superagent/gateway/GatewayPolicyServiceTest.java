@@ -1,5 +1,6 @@
 package com.superagent.gateway;
 
+import com.superagent.core.gateway.GatewayInputBoundMode;
 import com.superagent.core.gateway.GatewayPolicy;
 import com.superagent.core.gateway.GatewayReportMode;
 import com.superagent.core.settings.SystemSettingStore;
@@ -26,6 +27,9 @@ class GatewayPolicyServiceTest {
             assertThat(svc.get().defaultFloatAllowance())
                     .isEqualTo(GatewayPolicy.DEFAULT_FLOAT_ALLOWANCE);
             assertThat(svc.get().managedClis()).isEmpty();
+            assertThat(svc.get().hardQuotaClis()).isEmpty();
+            assertThat(svc.get().inputBoundModeFor("deepseek")).isEqualTo(GatewayInputBoundMode.HEURISTIC);
+            assertThat(GatewayPolicy.HARD_INPUT_BOUND_AVAILABLE).isFalse();
         });
     }
 
@@ -37,7 +41,7 @@ class GatewayPolicyServiceTest {
             assertThat(svc.managed("DeepSeek")).isTrue();
             assertThat(svc.managed("codex")).isFalse();
 
-            GatewayPolicy saved = svc.update(null, null, null, null, null, List.of("codex"));
+            GatewayPolicy saved = svc.update(null, null, null, null, null, List.of("codex"), null);
             assertThat(saved.managedClis()).containsExactly("codex");
             assertThat(svc.managed("deepseek")).isFalse();
             assertThat(svc.managed("codex")).isTrue();
@@ -49,7 +53,7 @@ class GatewayPolicyServiceTest {
         GatewayPolicyService svc = new GatewayPolicyService(new MemStore(), "deepseek");
         TenantContext.run("co1", () -> {
             assertThat(svc.managed("deepseek")).isTrue();
-            svc.update(null, null, null, null, null, List.of());
+            svc.update(null, null, null, null, null, List.of(), null);
             assertThat(svc.get().managedClis()).isEmpty();
             assertThat(svc.managed("deepseek")).isFalse();
         });
@@ -59,22 +63,34 @@ class GatewayPolicyServiceTest {
     void updatePersistsAndRejectsOutOfRange() {
         GatewayPolicyService svc = new GatewayPolicyService(new MemStore());
         TenantContext.run("co1", () -> {
-            GatewayPolicy updated = svc.update(3, 5, 100_000L, 50_000L, GatewayReportMode.SHADOW, List.of("deepseek"));
+            GatewayPolicy updated = svc.update(3, 5, 100_000L, 50_000L, GatewayReportMode.SHADOW,
+                    List.of("deepseek"), List.of());
             assertThat(updated.pendingAlertAfterHours()).isEqualTo(3);
             assertThat(updated.pendingCompanyTakeoverAfterBusinessDays()).isEqualTo(5);
             assertThat(updated.reconReserveTargetTokens()).isEqualTo(100_000L);
             assertThat(updated.defaultFloatAllowance()).isEqualTo(50_000L);
             assertThat(updated.reportMode()).isEqualTo(GatewayReportMode.SHADOW);
             assertThat(updated.managedClis()).containsExactly("deepseek");
+            assertThat(updated.hardQuotaClis()).isEmpty();
             assertThat(svc.get()).isEqualTo(updated);
 
-            assertThatThrownBy(() -> svc.update(0, null, null, null, null, null))
+            assertThatThrownBy(() -> svc.update(0, null, null, null, null, null, null))
                     .isInstanceOf(IllegalArgumentException.class);
-            assertThat(svc.update(null, null, null, null, GatewayReportMode.GATEWAY_PRIMARY, null).reportMode())
+            assertThat(svc.update(null, null, null, null, GatewayReportMode.GATEWAY_PRIMARY, null, null).reportMode())
                     .isEqualTo(GatewayReportMode.GATEWAY_PRIMARY);
-            assertThatThrownBy(() -> svc.update(null, null, null, null, null, List.of("not-a-cli")))
+            assertThatThrownBy(() -> svc.update(null, null, null, null, null, List.of("not-a-cli"), null))
                     .isInstanceOf(IllegalArgumentException.class);
         });
+    }
+
+    @Test
+    void rejectsHardQuotaClisUntilProvenEstimatorExists() {
+        GatewayPolicyService svc = new GatewayPolicyService(new MemStore());
+        TenantContext.run("co1", () ->
+                assertThatThrownBy(() -> svc.update(null, null, null, null, null, null, List.of("deepseek")))
+                        .isInstanceOf(IllegalArgumentException.class)
+                        .hasMessageContaining("hardQuotaClis")
+                        .hasMessageContaining("G0"));
     }
 
     /** Keeps blank values so "saved empty managed-clis" differs from "never set". */

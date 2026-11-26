@@ -102,7 +102,11 @@ public final class GatewayBudgetDtos {
     /**
      * Company gateway policy. Null fields on update keep the current value.
      * Defaults: alert 1h, takeover 2 business days, recon reserve target 500k, float F 100k,
-     * reportMode LEGACY, managedClis empty (metering off until the admin enables CLIs).
+     * reportMode LEGACY, managedClis empty (metering off until the admin enables CLIs),
+     * hardQuotaClis empty (no G0-proven hard input bound yet).
+     *
+     * @param inputBoundMode         effective request-level input bound mode ({@code HEURISTIC} until G0)
+     * @param hardInputBoundAvailable whether a proven tokenizer/count path exists in this build
      */
     public record Policy(
             int pendingAlertAfterHours,
@@ -110,7 +114,10 @@ public final class GatewayBudgetDtos {
             long reconReserveTargetTokens,
             long defaultFloatAllowance,
             String reportMode,
-            List<String> managedClis) {
+            List<String> managedClis,
+            List<String> hardQuotaClis,
+            String inputBoundMode,
+            boolean hardInputBoundAvailable) {
     }
 
     public record PolicyUpdate(
@@ -119,6 +126,7 @@ public final class GatewayBudgetDtos {
             Long reconReserveTargetTokens,
             Long defaultFloatAllowance,
             String reportMode,
-            List<String> managedClis) {
+            List<String> managedClis,
+            List<String> hardQuotaClis) {
     }
 }

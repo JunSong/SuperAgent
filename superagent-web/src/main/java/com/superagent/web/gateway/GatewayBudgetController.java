@@ -250,7 +250,8 @@ public class GatewayBudgetController {
                 body.reconReserveTargetTokens(),
                 body.defaultFloatAllowance(),
                 mode,
-                body.managedClis());
+                body.managedClis(),
+                body.hardQuotaClis());
         String period = GatewayPeriods.current(clock);
         // Keep company float pool usable when a default F is configured (debit only if the pool row exists).
         ensureFloatPoolAtLeast(period, updated.defaultFloatAllowance());
@@ -305,7 +306,10 @@ public class GatewayBudgetController {
                 p.reconReserveTargetTokens(),
                 p.defaultFloatAllowance(),
                 p.reportMode().name(),
-                p.managedClis());
+                p.managedClis(),
+                p.hardQuotaClis(),
+                p.inputBoundModeFor(null).name(),
+                GatewayPolicy.HARD_INPUT_BOUND_AVAILABLE);
     }
 
     private static void requireBody(Object body) {

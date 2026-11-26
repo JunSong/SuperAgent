@@ -12,6 +12,9 @@ import java.util.List;
  * @param defaultFloatAllowance                   F applied on allocate when the employee has none yet (0 = float off)
  * @param reportMode                              which usage source reports treat as primary
  * @param managedClis                             CLI keys whose runs go through the gateway (empty = none; metering off)
+ * @param hardQuotaClis                           CLIs allowed to claim {@link GatewayInputBoundMode#PROVEN} input
+ *                                                bounds (empty until G0 evidence; enabling without a proven
+ *                                                estimator is rejected)
  */
 public record GatewayPolicy(
         int pendingAlertAfterHours,
@@ -19,7 +22,8 @@ public record GatewayPolicy(
         long reconReserveTargetTokens,
         long defaultFloatAllowance,
         GatewayReportMode reportMode,
-        List<String> managedClis) {
+        List<String> managedClis,
+        List<String> hardQuotaClis) {
 
     public static final int DEFAULT_PENDING_ALERT_HOURS = 1;
     public static final int DEFAULT_PENDING_TAKEOVER_BUSINESS_DAYS = 2;
@@ -29,8 +33,14 @@ public record GatewayPolicy(
     public static final long DEFAULT_FLOAT_ALLOWANCE = 100_000L;
     public static final GatewayReportMode DEFAULT_REPORT_MODE = GatewayReportMode.LEGACY;
 
+    /**
+     * No CLI has a G0-proven tokenizer/count path yet — request-level input bounds stay heuristic.
+     */
+    public static final boolean HARD_INPUT_BOUND_AVAILABLE = false;
+
     public GatewayPolicy {
         managedClis = managedClis == null ? List.of() : List.copyOf(managedClis);
+        hardQuotaClis = hardQuotaClis == null ? List.of() : List.copyOf(hardQuotaClis);
     }
 
     public static GatewayPolicy defaults() {
@@ -40,6 +50,20 @@ public record GatewayPolicy(
                 DEFAULT_RECON_RESERVE_TARGET_TOKENS,
                 DEFAULT_FLOAT_ALLOWANCE,
                 DEFAULT_REPORT_MODE,
+                List.of(),
                 List.of());
+    }
+
+    /** Effective input-bound mode for a managed CLI (always heuristic until a proven estimator ships). */
+    public GatewayInputBoundMode inputBoundModeFor(String cli) {
+        if (!HARD_INPUT_BOUND_AVAILABLE) {
+            return GatewayInputBoundMode.HEURISTIC;
+        }
+        if (cli == null || cli.isBlank()) {
+            return GatewayInputBoundMode.HEURISTIC;
+        }
+        String key = cli.strip();
+        boolean hard = hardQuotaClis.stream().anyMatch(c -> c.equalsIgnoreCase(key));
+        return hard ? GatewayInputBoundMode.PROVEN : GatewayInputBoundMode.HEURISTIC;
     }
 }

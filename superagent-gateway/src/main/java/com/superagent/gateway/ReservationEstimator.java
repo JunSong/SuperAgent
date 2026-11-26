@@ -4,13 +4,15 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.superagent.core.error.ForbiddenException;
+import com.superagent.core.gateway.GatewayInputBoundMode;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 
 /**
- * Conservative R before hard tokenizer evidence (#34 §4): body bytes/4 as input upper bound
- * plus a capped slice of the request's protocol-bound output cap (or a floor when omitted).
+ * Soft reservation R (#34 option C): heuristic input ({@code body bytes/4}) plus a capped slice of
+ * the protocol-bound output cap. This is {@link GatewayInputBoundMode#HEURISTIC} until a G0-proven
+ * tokenizer/count path exists — monthly B/F still applies; do not promise hard vendor spend caps.
  *
  * <p>{@code declared} comes only from the protocol-appropriate field (H1). Every known output-cap
  * field is then clamped to that same {@code output} so dual-field requests cannot under-reserve
@@ -26,7 +28,7 @@ final class ReservationEstimator {
     static final long OUTPUT_RESERVE_CAP = 32_768;
     private static final String[] OUTPUT_FIELDS = {"max_tokens", "max_output_tokens", "max_completion_tokens"};
 
-    record Prepared(long reservedTokens, byte[] body, long outputCap) {
+    record Prepared(long reservedTokens, byte[] body, long outputCap, GatewayInputBoundMode inputBoundMode) {
     }
 
     private ReservationEstimator() {
@@ -68,7 +70,8 @@ final class ReservationEstimator {
         boolean changed = applyOutputCap(obj, field, output);
         byte[] outbound = changed ? writeBytes(obj) : body;
         long input = Math.max(1, (body.length + 3) / 4);
-        return new Prepared(input + output, outbound, output);
+        // Proven input bounds are not available in this build — always heuristic (option C).
+        return new Prepared(input + output, outbound, output, GatewayInputBoundMode.HEURISTIC);
     }
 
     /**

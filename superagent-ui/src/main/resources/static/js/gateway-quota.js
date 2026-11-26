@@ -49,6 +49,7 @@ const gqEl = {
   policyFloat: document.getElementById("gqPolicyFloat"),
   policyReport: document.getElementById("gqPolicyReport"),
   managedList: document.getElementById("gqManagedClisList"),
+  hardQuotaNote: document.getElementById("gqHardQuotaNote"),
   pending: document.getElementById("gqPending"),
 };
 
@@ -316,6 +317,13 @@ async function gqLoad() {
       if (gqEl.policyFloat) gqEl.policyFloat.value = gqDefaultFloat;
       gqEl.policyReport.value = pol.reportMode || "LEGACY";
       gqRenderManagedClis(pol.managedClis || []);
+      if (gqEl.hardQuotaNote) {
+        const mode = pol.inputBoundMode || "HEURISTIC";
+        const hard = !!pol.hardInputBoundAvailable;
+        gqEl.hardQuotaNote.textContent = hard
+          ? ("inputBoundMode=" + mode + "; hardQuotaClis=[" + (pol.hardQuotaClis || []).join(",") + "]")
+          : (typeof L === "function" ? L("gq.hardQuotaNote") : gqEl.hardQuotaNote.textContent);
+      }
       if (gqEl.allocFloat && !gqEl.allocFloat.value) {
         gqEl.allocFloat.placeholder = String(gqDefaultFloat);
       }
