@@ -36,4 +36,20 @@ class ReservationEstimatorTest {
         assertThat(ReservationEstimator.asUtf8(prepared.body())).contains("\"max_tokens\":32768");
         assertThat(ReservationEstimator.asUtf8(prepared.body())).doesNotContain("256000");
     }
+
+    @Test
+    void injectsOutputCapWhenMissingAndClampsMaxCompletionTokens() {
+        byte[] missing = "{\"model\":\"x\",\"messages\":[]}".getBytes(StandardCharsets.UTF_8);
+        ReservationEstimator.Prepared prepared = ReservationEstimator.prepare(missing);
+        assertThat(prepared.outputCap()).isEqualTo(256);
+        String out = ReservationEstimator.asUtf8(prepared.body());
+        assertThat(out).contains("\"max_tokens\":256");
+        assertThat(out).contains("\"max_output_tokens\":256");
+        assertThat(out).contains("\"max_completion_tokens\":256");
+
+        byte[] completion = "{\"max_completion_tokens\":256000}".getBytes(StandardCharsets.UTF_8);
+        ReservationEstimator.Prepared clamped = ReservationEstimator.prepare(completion);
+        assertThat(clamped.outputCap()).isEqualTo(ReservationEstimator.OUTPUT_RESERVE_CAP);
+        assertThat(ReservationEstimator.asUtf8(clamped.body())).contains("\"max_completion_tokens\":32768");
+    }
 }

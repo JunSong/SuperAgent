@@ -55,6 +55,14 @@ public interface GatewayMetering {
 
     GatewayAttempt markPending(String attemptId);
 
+    /**
+     * Like {@link #markPending(String)} but persists a known vendor total A when settle cannot finish
+     * (e.g. RECON_RESERVE short). {@code actualTokens < 0} leaves the stored A unchanged.
+     */
+    default GatewayAttempt markPending(String attemptId, long actualTokens) {
+        return markPending(attemptId);
+    }
+
     void cancel(String attemptId);
 
     /** Attempts in {@code status} for the period (newest first). Empty default for in-memory test stubs. */

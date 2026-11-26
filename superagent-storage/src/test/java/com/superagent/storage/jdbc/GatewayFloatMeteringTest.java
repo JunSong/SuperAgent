@@ -88,6 +88,30 @@ class GatewayFloatMeteringTest {
     }
 
     @Test
+    void sameTurnAfterExactBaseMayClaimFloat() {
+        JdbcGatewayMetering ledger = newLedger();
+        // Spend exactly to B under one turn, then tool round-trip on the same turn claims F.
+        ledger.putEmployee(PERIOD, "alice", 1_000, B - 1_000, B, F);
+        ledger.putPool(PERIOD, com.superagent.core.gateway.GatewayAccountType.FLOAT_POOL, F);
+
+        GatewayAttempt exact = ledger.reserve(req("r-exact", "turn-same", 1_000));
+        ledger.beginSend(exact.id());
+        ledger.settle(exact.id(), 1_000);
+        assertThat(ledger.findEmployee(PERIOD, "alice")).hasValueSatisfying(acc -> {
+            assertThat(acc.settled()).isEqualTo(B);
+            assertThat(acc.available()).isZero();
+            assertThat(acc.floatTurnId()).isNull();
+        });
+
+        GatewayAttempt cont = ledger.reserve(req("r-cont", "turn-same", 500));
+        assertThat(ledger.findEmployee(PERIOD, "alice")).hasValueSatisfying(acc -> {
+            assertThat(acc.floatTurnId()).isEqualTo("turn-same");
+            assertThat(acc.available()).isEqualTo(F - 500);
+        });
+        ledger.cancel(cont.id());
+    }
+
+    @Test
     void onlyOneWindowClaimsFloat() throws Exception {
         JdbcGatewayMetering ledger = newLedger();
         ledger.putEmployee(PERIOD, "alice", 5_000, 995_000, B, F);

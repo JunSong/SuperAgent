@@ -13,7 +13,13 @@ import java.util.Set;
 public final class GatewayRoutePolicy {
 
     private static final Set<String> ANTHROPIC_PATHS = Set.of("/v1/messages");
-    private static final Set<String> OPENAI_PATHS = Set.of("/v1/chat/completions", "/v1/responses");
+    /**
+     * OpenAI-compatible bases often already end in {@code /v1} ({@code api.openai.com/v1}).
+     * Accept both {@code /v1/...} (CLI appended full path) and {@code /chat/completions} style suffixes.
+     */
+    private static final Set<String> OPENAI_PATHS = Set.of(
+            "/v1/chat/completions", "/v1/responses",
+            "/chat/completions", "/responses");
 
     private GatewayRoutePolicy() {
     }

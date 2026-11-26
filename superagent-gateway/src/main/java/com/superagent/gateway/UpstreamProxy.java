@@ -261,11 +261,12 @@ public class UpstreamProxy {
         }
         var total = usageProbe.total();
         if (total.isPresent()) {
+            long a = total.getAsLong();
             try {
-                metering.settle(attempt.id(), total.getAsLong());
+                metering.settle(attempt.id(), a);
             } catch (RuntimeException e) {
                 log.warn("gateway settle failed attempt={}: {}", attempt.id(), e.getMessage());
-                metering.markPending(attempt.id());
+                metering.markPending(attempt.id(), a);
             }
         } else {
             metering.markPending(attempt.id());
@@ -287,7 +288,12 @@ public class UpstreamProxy {
         if (suffix == null || suffix.isBlank() || "/".equals(suffix)) {
             return b;
         }
-        return suffix.startsWith("/") ? b + suffix : b + "/" + suffix;
+        String s = suffix.startsWith("/") ? suffix : "/" + suffix;
+        // OpenAI-compatible defaultBaseUrl already ends with /v1; CLI may still send /v1/... → strip one.
+        if (b.endsWith("/v1") && s.startsWith("/v1/")) {
+            s = s.substring(3);
+        }
+        return b + s;
     }
 
     private static void applyMethod(HttpRequest.Builder req, String method, byte[] body) {

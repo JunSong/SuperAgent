@@ -276,14 +276,20 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
             boolean isFloatTurn = floatTurn != null && floatTurn.equals(request.turnId());
 
             // New turns cannot open on float alone once base is exhausted (#34 / R04).
+            // Same turn that already reserved under B may continue and claim F (tool round-trips).
             if (used >= b && !isFloatTurn) {
-                throw new GatewayQuotaExhaustedException(
-                        "本月基础额度已用尽（QUOTA_EXHAUSTED）");
+                boolean sameTurnContinuation = f > 0 && floatTurn == null
+                        && hasAttemptForTurn(company, request.period(), request.payerUserId(), request.turnId());
+                if (!sameTurnContinuation) {
+                    throw new GatewayQuotaExhaustedException(
+                            "本月基础额度已用尽（QUOTA_EXHAUSTED）");
+                }
+                // fall through: claim float for this continuing turn
             }
 
-            if (used + r > b) {
+            if (used + r > b || (used >= b && !isFloatTurn && floatTurn == null)) {
                 if (floatTurn == null) {
-                    // Crossing B mid-turn (used < B): claim F for this turn only.
+                    // Crossing B, or continuing past exact B on the same turn: claim F for this turn only.
                     if (f <= 0) {
                         throw new GatewayQuotaInsufficientException(
                                 "可用额度不足：需要预占 " + r + " tokens（QUOTA_INSUFFICIENT）");
@@ -389,6 +395,15 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
             long employeeCharge = Math.min(a, r);
             long overage = a - employeeCharge;
             long refund = r - employeeCharge;
+            if (overage > 0 && !canDebitReconReserve(company, current.period(), overage)) {
+                // Keep the freeze; persist A so reconcile still sees the vendor total.
+                jdbc.update("""
+                        UPDATE gateway_attempt SET status = ?, actual_tokens = ?
+                        WHERE company_id = ? AND id = ?
+                        """,
+                        GatewayAttemptStatus.PENDING_RECONCILIATION.name(), a, company, attemptId);
+                return requireAttempt(company, attemptId);
+            }
             int moved = jdbc.update("""
                     UPDATE gateway_account
                     SET available_tokens = available_tokens + ?,
@@ -402,10 +417,16 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
             if (moved == 0) {
                 throw new IllegalStateException("account reserved balance missing for attempt " + attemptId);
             }
-            if (overage > 0) {
-                debitPool(company, current.period(), GatewayAccountType.RECON_RESERVE, overage);
-                writeLedger(company, "overage:" + attemptId, 1, current.period(), POOL_OWNER,
-                        -overage, 0, 0, "OVERAGE", attemptId, digest("overage", attemptId, overage));
+            if (overage > 0 && !tryDebitReconReserve(company, current.period(), overage, attemptId)) {
+                // Race: reserve looked funded then emptied — keep A, restore nothing (employee already charged).
+                jdbc.update("""
+                        UPDATE gateway_attempt SET status = ?, actual_tokens = ?
+                        WHERE company_id = ? AND id = ?
+                        """,
+                        GatewayAttemptStatus.PENDING_RECONCILIATION.name(), a, company, attemptId);
+                writeLedger(company, "settle-pending:" + attemptId, 1, current.period(), current.payerUserId(),
+                        refund, -r, employeeCharge, "SETTLE_PENDING_OVERAGE", attemptId, null);
+                return requireAttempt(company, attemptId);
             }
             jdbc.update("""
                     UPDATE gateway_attempt SET status = ?, actual_tokens = ?
@@ -421,19 +442,43 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
 
     @Override
     public GatewayAttempt markPending(String attemptId) {
+        return markPending(attemptId, -1);
+    }
+
+    @Override
+    public GatewayAttempt markPending(String attemptId, long actualTokens) {
         return tx.execute(status -> {
             String company = TenantSchema.company();
             GatewayAttempt current = requireAttempt(company, attemptId);
-            if (current.status() == GatewayAttemptStatus.SETTLED
-                    || current.status() == GatewayAttemptStatus.PENDING_RECONCILIATION) {
+            if (current.status() == GatewayAttemptStatus.SETTLED) {
                 return current;
             }
-            jdbc.update("""
-                    UPDATE gateway_attempt SET status = ?
-                    WHERE company_id = ? AND id = ? AND status IN (?, ?)
-                    """,
-                    GatewayAttemptStatus.PENDING_RECONCILIATION.name(), company, attemptId,
-                    GatewayAttemptStatus.SENDING.name(), GatewayAttemptStatus.RESERVED.name());
+            if (current.status() == GatewayAttemptStatus.PENDING_RECONCILIATION) {
+                if (actualTokens >= 0 && current.actualTokens() != actualTokens) {
+                    jdbc.update("""
+                            UPDATE gateway_attempt SET actual_tokens = ?
+                            WHERE company_id = ? AND id = ?
+                            """,
+                            actualTokens, company, attemptId);
+                    return requireAttempt(company, attemptId);
+                }
+                return current;
+            }
+            if (actualTokens >= 0) {
+                jdbc.update("""
+                        UPDATE gateway_attempt SET status = ?, actual_tokens = ?
+                        WHERE company_id = ? AND id = ? AND status IN (?, ?)
+                        """,
+                        GatewayAttemptStatus.PENDING_RECONCILIATION.name(), actualTokens, company, attemptId,
+                        GatewayAttemptStatus.SENDING.name(), GatewayAttemptStatus.RESERVED.name());
+            } else {
+                jdbc.update("""
+                        UPDATE gateway_attempt SET status = ?
+                        WHERE company_id = ? AND id = ? AND status IN (?, ?)
+                        """,
+                        GatewayAttemptStatus.PENDING_RECONCILIATION.name(), company, attemptId,
+                        GatewayAttemptStatus.SENDING.name(), GatewayAttemptStatus.RESERVED.name());
+            }
             return requireAttempt(company, attemptId);
         });
     }
@@ -738,6 +783,42 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256 unavailable", e);
         }
+    }
+
+    private boolean hasAttemptForTurn(String company, String period, String payerUserId, String turnId) {
+        if (turnId == null || turnId.isBlank()) {
+            return false;
+        }
+        Integer n = jdbc.queryForObject("""
+                SELECT COUNT(*) FROM gateway_attempt
+                WHERE company_id = ? AND period = ? AND payer_user_id = ? AND turn_id = ?
+                """,
+                Integer.class, company, period, payerUserId, turnId);
+        return n != null && n > 0;
+    }
+
+    private boolean canDebitReconReserve(String company, String period, long overage) {
+        ensurePoolRow(company, period, GatewayAccountType.RECON_RESERVE);
+        return findAccount(period, GatewayAccountType.RECON_RESERVE, POOL_OWNER)
+                .filter(p -> p.available() >= overage)
+                .isPresent();
+    }
+
+    /** Debits RECON_RESERVE for A−R; returns false when the pool cannot cover (caller keeps PENDING + A). */
+    private boolean tryDebitReconReserve(String company, String period, long overage, String attemptId) {
+        ensurePoolRow(company, period, GatewayAccountType.RECON_RESERVE);
+        int n = jdbc.update("""
+                UPDATE gateway_account SET available_tokens = available_tokens - ?
+                WHERE company_id = ? AND period = ? AND account_type = ? AND owner_id = ?
+                  AND available_tokens >= ?
+                """,
+                overage, company, period, GatewayAccountType.RECON_RESERVE.name(), POOL_OWNER, overage);
+        if (n == 0) {
+            return false;
+        }
+        writeLedger(company, "overage:" + attemptId, 1, period, POOL_OWNER,
+                -overage, 0, 0, "OVERAGE", attemptId, digest("overage", attemptId, overage));
+        return true;
     }
 
     private void debitPoolIfPresent(String company, String period, GatewayAccountType type, long amount) {

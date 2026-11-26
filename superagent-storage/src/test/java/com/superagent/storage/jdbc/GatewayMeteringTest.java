@@ -143,6 +143,24 @@ class GatewayMeteringTest {
                 .hasValueSatisfying(p -> assertThat(p.available()).isEqualTo(990));
     }
 
+    @Test
+    void overageWithoutReconReserveKeepsKnownActualPending() {
+        JdbcGatewayMetering ledger = newLedger();
+        String period = "2026-11";
+        ledger.putEmployee(period, "alice", 100);
+        // No RECON_RESERVE funding — settle A>R must still store A.
+        GatewayAttempt first = ledger.reserve(new GatewayMetering.ReserveRequest(
+                "req-pend", "turn-p", "run-p", "alice", "deepseek", "m", period, 60));
+        assertThat(ledger.beginSend(first.id())).isTrue();
+        GatewayAttempt pending = ledger.settle(first.id(), 70);
+        assertThat(pending.status()).isEqualTo(GatewayAttemptStatus.PENDING_RECONCILIATION);
+        assertThat(pending.actualTokens()).isEqualTo(70);
+        assertThat(ledger.findEmployee(period, "alice")).hasValueSatisfying(a -> {
+            assertThat(a.reserved()).isEqualTo(60); // freeze held until reconcile funds RECON
+            assertThat(a.settled()).isZero();
+        });
+    }
+
     private static JdbcGatewayMetering newLedger() {
         return new JdbcGatewayMetering(new JdbcTemplate(new DriverManagerDataSource(
                 "jdbc:h2:mem:gw-meter-" + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "")));

@@ -115,11 +115,11 @@ class TokenUsageServiceTest {
 
     @Test
     void gatewayPrimarySummaryUsesSettlementsNotCli() {
-        // Same sessionId as settlement → CLI shadow row is dropped (no double-count).
-        service.record(new UsageContext("ada", UsageContext.SOURCE_CHAT, "dev", null, "turn-1", "deepseek"),
-                "[{\"model\":\"cli-model\",\"input\":999,\"cacheRead\":0,\"cacheWrite\":0,\"cacheWrite1h\":0,\"output\":1,\"reasoning\":0}]");
+        // Chat sessionId ≠ gateway turnId; same CLI still must not double-count (42, not 84).
+        service.record(new UsageContext("ada", UsageContext.SOURCE_CHAT, "dev", null, "chat-session-9", "deepseek"),
+                "[{\"model\":\"cli-model\",\"input\":42,\"cacheRead\":0,\"cacheWrite\":0,\"cacheWrite1h\":0,\"output\":0,\"reasoning\":0}]");
         UsageRecord settled = new UsageRecord("p1", Instant.parse("2026-11-15T12:00:00Z"), "ada",
-                UsageContext.SOURCE_GATEWAY, null, null, "turn-1", "deepseek", "deepseek-chat",
+                UsageContext.SOURCE_GATEWAY, null, null, "user-msg-turn", "deepseek", "deepseek-chat",
                 42, 0, 0, 0, 0, 0, 0, null, null);
         service.setGatewayReportForTest(() -> GatewayReportMode.GATEWAY_PRIMARY,
                 (user, from, to) -> List.of(settled));
