@@ -57,6 +57,8 @@ public class UpstreamProxy {
      */
     private static final Set<String> FORWARD_HEADERS = Set.of(
             "content-type", "accept", "anthropic-beta", "openai-beta");
+    /** Extra room on JDK request timeout so {@link #pumpBody} / idle watchdogs fire first (r8 I-1). */
+    static final Duration JDK_REQUEST_TIMEOUT_SLACK = Duration.ofMillis(250);
 
     private final CredentialService credentials;
     private final HttpClient http;
@@ -166,8 +168,11 @@ public class UpstreamProxy {
                     }
                     String upstreamBase = resolveUpstreamBase(grant.cli(), cred.baseUrl());
                     String target = joinUrl(upstreamBase, normalizedSuffix);
+                    // JDK HttpRequest.timeout races our pumpBody watchdog on the same deadline and can
+                    // throw HttpTimeoutException("request timed out") first. Keep a short slack so the
+                    // custom absolute deadline / idle watcher owns the message and test coverage.
                     HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(target))
-                            .timeout(timeouts.request());
+                            .timeout(timeouts.request().plus(JDK_REQUEST_TIMEOUT_SLACK));
                     applyMethod(req, method, prepared.body());
                     copyForwardHeaders(requestHeaders, req);
                     applyCompanyAuth(req, protocol, cred);

@@ -224,8 +224,9 @@ public class TokenUsageService implements UsageRecorder {
             List<UsageRecord> identity = candidateRunIds.isEmpty()
                     ? List.of()
                     : gatewaySettlements.settlementsForRunIds(user, candidateRunIds);
+            Map<String, List<UsageRecord>> identityByRun = indexSettlementsByRunId(identity);
             List<UsageRecord> legacy = legacyCandidates.stream()
-                    .filter(r -> !shadowedBySettlement(r, identity))
+                    .filter(r -> !shadowedBySettlement(r, identityByRun))
                     .toList();
             if (legacy.isEmpty()) {
                 return settlements;
@@ -259,25 +260,37 @@ public class TokenUsageService implements UsageRecorder {
         return null;
     }
 
+    static Map<String, List<UsageRecord>> indexSettlementsByRunId(List<UsageRecord> settlements) {
+        Map<String, List<UsageRecord>> byRun = new LinkedHashMap<>();
+        if (settlements == null) {
+            return byRun;
+        }
+        for (UsageRecord s : settlements) {
+            if (s == null || s.runId() == null || s.runId().isBlank()) {
+                continue;
+            }
+            byRun.computeIfAbsent(s.runId(), k -> new ArrayList<>()).add(s);
+        }
+        return byRun;
+    }
+
     /**
      * Drop a CLI row only when it shares a managed run key with a settlement and matches cli/user
-     * (same guards as the pre-runId shadow path).
+     * (same guards as the pre-runId shadow path). Indexed by runId so large windows stay O(n+m).
      */
-    static boolean shadowedBySettlement(UsageRecord cli, List<UsageRecord> settlements) {
-        if (cli == null || settlements == null || settlements.isEmpty()) {
+    static boolean shadowedBySettlement(UsageRecord cli, Map<String, List<UsageRecord>> settlementsByRunId) {
+        if (cli == null || settlementsByRunId == null || settlementsByRunId.isEmpty()) {
             return false;
         }
         String key = shadowKey(cli);
         if (key == null) {
             return false;
         }
-        for (UsageRecord s : settlements) {
-            if (s == null || s.runId() == null || s.runId().isBlank()) {
-                continue;
-            }
-            if (!key.equals(s.runId())) {
-                continue;
-            }
+        List<UsageRecord> hits = settlementsByRunId.get(key);
+        if (hits == null || hits.isEmpty()) {
+            return false;
+        }
+        for (UsageRecord s : hits) {
             if (cli.cli() != null && s.cli() != null && !cli.cli().equals(s.cli())) {
                 continue;
             }

@@ -103,17 +103,20 @@ public class JdbcUsageStore implements UsageStore {
     private boolean columnPresent(String column, boolean clickHouse) {
         if (!clickHouse) {
             try {
+                // Scope to the current schema so another DB's token_usage cannot fool us (r8).
                 Integer present = jdbc.queryForObject(
                         "SELECT COUNT(*) FROM information_schema.columns "
-                                + "WHERE LOWER(table_name) = 'token_usage' AND LOWER(column_name) = LOWER(?)",
+                                + "WHERE LOWER(table_schema) = LOWER(DATABASE()) "
+                                + "AND LOWER(table_name) = 'token_usage' AND LOWER(column_name) = LOWER(?)",
                         Integer.class, column);
-                if (present != null) {
-                    return present > 0;
+                if (present != null && present > 0) {
+                    return true;
                 }
             } catch (org.springframework.dao.DataAccessException ignored) {
-                // Fall through to SELECT probe (some H2/MySQL setups).
+                // Fall through to SELECT probe (H2 / drivers where DATABASE() ≠ table_schema).
             }
         }
+        // Authoritative for this connection: works when information_schema schema filter misses (H2).
         try {
             jdbc.queryForList("SELECT " + column + " FROM token_usage WHERE 1 = 0");
             return true;

@@ -95,6 +95,7 @@ class UpstreamProxyTimeoutTest {
     @Test
     void blockedBodyReadIsInterruptedByRequestDeadlineWatcher() throws Exception {
         // Headers then silence: the reader blocks in InputStream.read until the watchdog closes it.
+        // UpstreamProxy keeps JDK HttpRequest.timeout = request + slack so this path (not JDK) wins.
         String stubBase = startStub((exchange, out) -> {
             exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
             exchange.sendResponseHeaders(200, 0);
@@ -114,7 +115,7 @@ class UpstreamProxyTimeoutTest {
 
         assertThatThrownBy(() -> forward(proxy))
                 .isInstanceOf(IOException.class)
-                .hasMessageContaining("request timeout");
+                .hasMessageContaining("upstream request timeout");
         assertThat(hits.get()).isEqualTo(1);
     }
 

@@ -28,7 +28,8 @@ public interface GatewaySettlementUsage {
      * @param user payer user id, or null for the whole company
      */
     default List<UsageRecord> settlementsForRunIds(String user, Collection<String> runIds) {
-        return List.of();
+        throw new UnsupportedOperationException(
+                "settlementsForRunIds must be implemented for GATEWAY_PRIMARY CLI shadowing");
     }
 
     /**
