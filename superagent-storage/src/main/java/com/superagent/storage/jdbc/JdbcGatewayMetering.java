@@ -428,7 +428,8 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
         }
         return tx.execute(status -> {
             String company = TenantSchema.company();
-            GatewayAttempt current = requireAttempt(company, attemptId);
+            // Lock order: attempt → RECON pool → employee (H01). Never reopen a committed SETTLED.
+            GatewayAttempt current = lockAttempt(company, attemptId);
             if (current.status() == GatewayAttemptStatus.SETTLED) {
                 if (current.actualTokens() == actualTokens) {
                     return current;
@@ -447,11 +448,16 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
             // Debit RECON before releasing the employee freeze so a concurrent drain cannot leave us
             // charged-but-pending (which would steal another attempt's reserved on retry).
             if (overage > 0 && !tryDebitReconReserve(company, current.period(), overage, attemptId)) {
-                jdbc.update("""
+                int pending = jdbc.update("""
                         UPDATE gateway_attempt SET status = ?, actual_tokens = ?
-                        WHERE company_id = ? AND id = ?
+                        WHERE company_id = ? AND id = ? AND status IN (?, ?)
                         """,
-                        GatewayAttemptStatus.PENDING_RECONCILIATION.name(), a, company, attemptId);
+                        GatewayAttemptStatus.PENDING_RECONCILIATION.name(), a, company, attemptId,
+                        GatewayAttemptStatus.SENDING.name(),
+                        GatewayAttemptStatus.PENDING_RECONCILIATION.name());
+                if (pending == 0) {
+                    return settleReplayAfterRace(company, attemptId, actualTokens);
+                }
                 return requireAttempt(company, attemptId);
             }
             int moved = jdbc.update("""
@@ -471,11 +477,29 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
                 }
                 throw new IllegalStateException("account reserved balance missing for attempt " + attemptId);
             }
-            jdbc.update("""
+            int settled = jdbc.update("""
                     UPDATE gateway_attempt SET status = ?, actual_tokens = ?
-                    WHERE company_id = ? AND id = ?
+                    WHERE company_id = ? AND id = ? AND status IN (?, ?)
                     """,
-                    GatewayAttemptStatus.SETTLED.name(), a, company, attemptId);
+                    GatewayAttemptStatus.SETTLED.name(), a, company, attemptId,
+                    GatewayAttemptStatus.SENDING.name(),
+                    GatewayAttemptStatus.PENDING_RECONCILIATION.name());
+            if (settled == 0) {
+                if (overage > 0) {
+                    creditPool(company, current.period(), GatewayAccountType.RECON_RESERVE, overage);
+                }
+                // Undo employee move — concurrent winner already owns the terminal state.
+                jdbc.update("""
+                        UPDATE gateway_account
+                        SET available_tokens = available_tokens - ?,
+                            reserved_tokens = reserved_tokens + ?,
+                            settled_tokens = settled_tokens - ?
+                        WHERE company_id = ? AND period = ? AND account_type = ? AND owner_id = ?
+                        """,
+                        refund, r, employeeCharge, company, current.period(),
+                        GatewayAccountType.EMPLOYEE.name(), current.payerUserId());
+                return settleReplayAfterRace(company, attemptId, actualTokens);
+            }
             writeLedger(company, "settle:" + attemptId, 1, current.period(),
                     GatewayAccountType.EMPLOYEE, current.payerUserId(),
                     refund, -r, employeeCharge, "SETTLE", attemptId, null);
@@ -777,7 +801,11 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
                 .toList();
     }
 
-    /** Vendor total A is one number; park it in input so UsageRecord.total() matches A. */
+    /**
+     * Vendor total A is one number; park it in input so {@link UsageRecord#total()} matches A.
+     * {@code sessionId} carries the managed {@code runId} so GATEWAY_PRIMARY can shadow CLI rows by
+     * exact run identity (not by amount/time heuristics).
+     */
     private static UsageRecord toUsageRecord(GatewayProjectionEvent e) {
         return new UsageRecord(
                 e.id(),
@@ -786,7 +814,7 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
                 UsageContext.SOURCE_GATEWAY,
                 null,
                 null,
-                e.turnId(),
+                e.runId(),
                 e.cli(),
                 e.model(),
                 e.actualTokens(),
@@ -1000,6 +1028,32 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
     private GatewayAttempt requireAttempt(String company, String attemptId) {
         return findAttempt(company, attemptId)
                 .orElseThrow(() -> new IllegalStateException("gateway attempt not found: " + attemptId));
+    }
+
+    /** Row-lock the attempt so concurrent settle/replay share one snapshot (H01). */
+    private GatewayAttempt lockAttempt(String company, String attemptId) {
+        List<GatewayAttempt> rows = jdbc.query("""
+                        SELECT id, request_id, attempt_no, turn_id, run_id, payer_user_id, cli, model, period,
+                          reserved_tokens, actual_tokens, status
+                        FROM gateway_attempt WHERE company_id = ? AND id = ?
+                        FOR UPDATE
+                        """,
+                ATTEMPT, company, attemptId);
+        if (rows.isEmpty()) {
+            throw new IllegalStateException("gateway attempt not found: " + attemptId);
+        }
+        return rows.getFirst();
+    }
+
+    private GatewayAttempt settleReplayAfterRace(String company, String attemptId, long actualTokens) {
+        GatewayAttempt again = requireAttempt(company, attemptId);
+        if (again.status() == GatewayAttemptStatus.SETTLED) {
+            if (again.actualTokens() == actualTokens) {
+                return again;
+            }
+            throw new IllegalStateException("attempt already settled with A=" + again.actualTokens());
+        }
+        throw new IllegalStateException("cannot settle attempt in status " + again.status());
     }
 
     private Optional<GatewayAttempt> findAttempt(String company, String attemptId) {

@@ -988,11 +988,30 @@ public class ChatService implements org.springframework.context.SmartLifecycle {
         String agentSessionId = agentSessionIdFor(session, agentType);
         AtomicReference<String> capturedAgentSessionId = new AtomicReference<>(agentSessionId);
 
+        String cli = agentType.cliName();
+        CredentialService.Choice choice = credentials == null ? new CredentialService.Choice(null) : credentials.current(cli);
+        boolean managed = modelRunLeases != null && modelRunLeases.managed(cli);
+        // Managed: ensure the company has a Key (gateway will decrypt it), but inject only a run token into the CLI.
+        // Issue the lease before UsageContext so CLI TOKENS share the same runId as gateway settlements.
+        ModelRunLease lease = null;
+        RunCredential runCredential = choice.credential();
+        String managedRunId = null;
+        if (managed) {
+            if (choice.credential() == null || choice.credential().apiKey() == null || choice.credential().apiKey().isBlank()) {
+                throw new ForbiddenException("本公司还没有配置 " + cli + " 的 API Key：受管网关不能使用机器上的登录态");
+            }
+            managedRunId = java.util.UUID.randomUUID().toString();
+            // turnId = userMessageId (#34): tools / hops / retries keep this; a new user message starts a new turn.
+            lease = modelRunLeases.issue(userMessageId, managedRunId, user, cli, model, java.time.Duration.ofHours(2));
+            runCredential = new RunCredential(lease.runId(), lease.gatewayBaseUrl(), lease.token(), true);
+        }
+
         // The tokens go on whoever sent the message (in a shared agent, that member), not the agent's owner.
+        // Managed: sessionId = runId so GATEWAY_PRIMARY can shadow CLI by exact run identity.
         com.superagent.core.usage.UsageContext paying = new com.superagent.core.usage.UsageContext(user,
                 emitter.agent() != null && emitter.agent().isSuper() ? com.superagent.core.usage.UsageContext.SOURCE_SUPERAGENT
                         : com.superagent.core.usage.UsageContext.SOURCE_CHAT,
-                session.agentId(), null, session.id(), agentType.cliName());
+                session.agentId(), null, managedRunId != null ? managedRunId : session.id(), cli);
         AgentEventSink sink = emitter.timer().tapTools(com.superagent.core.usage.UsageRecorder.tap(usage, paying, event -> {
             store.appendEvent(new AgentEvent(session.id(), assistantMessageId, event.seq(),
                     event.type(), event.payload(), event.createdAt()));
@@ -1015,21 +1034,6 @@ public class ChatService implements org.springframework.context.SmartLifecycle {
         AgentTurnCustomizer special = emitter.special();
         McpGrants.Grant grant = special != null ? special.openGrant(emitter.agent(), user, session, assistantMessageId)
                 : mcpGrants == null ? null : mcpGrants.openChat(user, session.agentId(), session.id(), assistantMessageId, session.workspaceDir());
-        String cli = agentType.cliName();
-        CredentialService.Choice choice = credentials == null ? new CredentialService.Choice(null) : credentials.current(cli);
-        boolean managed = modelRunLeases != null && modelRunLeases.managed(cli);
-        // Managed: ensure the company has a Key (gateway will decrypt it), but inject only a run token into the CLI.
-        ModelRunLease lease = null;
-        RunCredential runCredential = choice.credential();
-        if (managed) {
-            if (choice.credential() == null || choice.credential().apiKey() == null || choice.credential().apiKey().isBlank()) {
-                throw new ForbiddenException("本公司还没有配置 " + cli + " 的 API Key：受管网关不能使用机器上的登录态");
-            }
-            String runId = java.util.UUID.randomUUID().toString();
-            // turnId = userMessageId (#34): tools / hops / retries keep this; a new user message starts a new turn.
-            lease = modelRunLeases.issue(userMessageId, runId, user, cli, model, java.time.Duration.ofHours(2));
-            runCredential = new RunCredential(lease.runId(), lease.gatewayBaseUrl(), lease.token(), true);
-        }
         // The company's connectors, with the identity of whoever sent this message (their own authorizations).
         List<McpServerSpec> connected = connectors == null ? List.of() : connectors.mcpServersFor(user);
         List<String> tools = allowedTools;

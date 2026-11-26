@@ -593,12 +593,13 @@ public class AgentMemoryService {
             if (managedRuns != null) {
                 managed = managedRuns.open(cli, tid, payerUserId, model);
             }
+            String usageSessionId = managed != null && managed.managed() ? managed.credential().id() : null;
             runner.run(new AgentRunRequest(UUID.randomUUID().toString(), null, scratch.toString(), prompt, model,
                     List.of(), false, null, null, List.of(), null,
                     managed != null ? managed.credential()
                             : (credentials == null ? null : credentials.current(cli).credential())),
                     com.superagent.core.usage.UsageRecorder.tap(usage, new com.superagent.core.usage.UsageContext(payerUserId,
-                            source, agent.id(), null, null, type.cliName()), sink),
+                            source, agent.id(), null, usageSessionId, type.cliName()), sink),
                     cancellation);
         } finally {
             if (managed != null) {

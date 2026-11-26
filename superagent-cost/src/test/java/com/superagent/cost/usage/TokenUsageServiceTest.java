@@ -115,12 +115,13 @@ class TokenUsageServiceTest {
 
     @Test
     void gatewayPrimarySummaryUsesSettlementsNotCli() {
-        // Same managed call: CLI TOKENS + settlement, same total near the same time → count once (42).
+        // Same managed runId on CLI TOKENS + settlement → count once (42).
         Instant at = Instant.parse("2026-11-15T12:00:00Z");
-        rows.add(new UsageRecord("cli1", at, "ada", UsageContext.SOURCE_CHAT, "dev", null, "chat-session-9",
+        String runId = "run-shared-1";
+        rows.add(new UsageRecord("cli1", at, "ada", UsageContext.SOURCE_CHAT, "dev", null, runId,
                 "deepseek", "cli-model", 42, 0, 0, 0, 0, 0, 0, null, null));
         UsageRecord settled = new UsageRecord("p1", at, "ada",
-                UsageContext.SOURCE_GATEWAY, null, null, "user-msg-turn", "deepseek", "deepseek-chat",
+                UsageContext.SOURCE_GATEWAY, null, null, runId, "deepseek", "deepseek-chat",
                 42, 0, 0, 0, 0, 0, 0, null, null);
         service.setGatewayReportForTest(() -> GatewayReportMode.GATEWAY_PRIMARY,
                 (user, from, to) -> List.of(settled));
@@ -129,6 +130,40 @@ class TokenUsageServiceTest {
         assertThat(s.reportMode()).isEqualTo("GATEWAY_PRIMARY");
         assertThat(s.total().total()).isEqualTo(42);
         assertThat(s.byModel()).singleElement().extracting(UsageDtos.Total::key).isEqualTo("deepseek-chat");
+    }
+
+    @Test
+    void reviewIndependentEqualUsageMustNotDisappear() {
+        Instant at = Instant.parse("2026-11-15T12:00:00Z");
+        rows.add(new UsageRecord("cli-indep", at, "ada", UsageContext.SOURCE_CHAT, "dev", null,
+                "independent-session", "deepseek", "cli-model", 42, 0, 0, 0, 0, 0, 0, null, null));
+        UsageRecord settled = new UsageRecord("p1", at, "ada",
+                UsageContext.SOURCE_GATEWAY, null, null, "another-turn-run", "deepseek", "deepseek-chat",
+                42, 0, 0, 0, 0, 0, 0, null, null);
+        service.setGatewayReportForTest(() -> GatewayReportMode.GATEWAY_PRIMARY,
+                (user, from, to) -> List.of(settled));
+
+        UsageDtos.Summary s = service.summary("ada", Instant.EPOCH, Instant.now(), ZoneOffset.UTC);
+        assertThat(s.total().total()).isEqualTo(84);
+    }
+
+    @Test
+    void reviewMultiAttemptRunMustNotDoubleCount() {
+        Instant at = Instant.parse("2026-11-15T12:00:00Z");
+        String runId = "run-multi-attempt";
+        rows.add(new UsageRecord("cli-agg", at, "ada", UsageContext.SOURCE_CHAT, "dev", null, runId,
+                "deepseek", "cli-model", 100, 0, 0, 0, 0, 0, 0, null, null));
+        UsageRecord a30 = new UsageRecord("g30", at, "ada",
+                UsageContext.SOURCE_GATEWAY, null, null, runId, "deepseek", "deepseek-chat",
+                30, 0, 0, 0, 0, 0, 0, null, null);
+        UsageRecord a70 = new UsageRecord("g70", at.plusSeconds(1), "ada",
+                UsageContext.SOURCE_GATEWAY, null, null, runId, "deepseek", "deepseek-chat",
+                70, 0, 0, 0, 0, 0, 0, null, null);
+        service.setGatewayReportForTest(() -> GatewayReportMode.GATEWAY_PRIMARY,
+                (user, from, to) -> List.of(a30, a70));
+
+        UsageDtos.Summary s = service.summary("ada", Instant.EPOCH, Instant.now(), ZoneOffset.UTC);
+        assertThat(s.total().total()).isEqualTo(100);
     }
 
     @Test

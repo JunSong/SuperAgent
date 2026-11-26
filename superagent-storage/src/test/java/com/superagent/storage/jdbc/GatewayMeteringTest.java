@@ -238,6 +238,70 @@ class GatewayMeteringTest {
     }
 
     @Test
+    void concurrentReplayMustNotReopenSettledAttempt() throws Exception {
+        JdbcGatewayMetering ledger = newLedger();
+        String period = "2026-11";
+        ledger.putEmployee(period, "alice", 200);
+        ledger.putPool(period, GatewayAccountType.RECON_RESERVE, 10);
+
+        GatewayAttempt attempt = ledger.reserve(new GatewayMetering.ReserveRequest(
+                "req-conc", "turn-conc", "run-conc", "alice", "deepseek", "m", period, 60));
+        assertThat(ledger.beginSend(attempt.id())).isTrue();
+
+        java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicReference<GatewayAttempt> r1 = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<GatewayAttempt> r2 = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<Throwable> err = new java.util.concurrent.atomic.AtomicReference<>();
+        Thread t1 = new Thread(() -> TenantContext.run(InCompany.ID, () -> {
+            try {
+                start.await();
+                r1.set(ledger.settle(attempt.id(), 70));
+            } catch (Throwable t) {
+                err.compareAndSet(null, t);
+            }
+        }));
+        Thread t2 = new Thread(() -> TenantContext.run(InCompany.ID, () -> {
+            try {
+                start.await();
+                r2.set(ledger.settle(attempt.id(), 70));
+            } catch (Throwable t) {
+                err.compareAndSet(null, t);
+            }
+        }));
+        t1.start();
+        t2.start();
+        start.countDown();
+        t1.join();
+        t2.join();
+        assertThat(err.get()).isNull();
+        assertThat(r1.get().status()).isEqualTo(GatewayAttemptStatus.SETTLED);
+        assertThat(r2.get().status()).isEqualTo(GatewayAttemptStatus.SETTLED);
+        assertThat(r1.get().actualTokens()).isEqualTo(70);
+        assertThat(r2.get().actualTokens()).isEqualTo(70);
+        assertThat(ledger.listAttempts(GatewayAttemptStatus.PENDING_RECONCILIATION, period, 10)).isEmpty();
+        assertThat(ledger.listProjections(period, 10)).hasSize(1);
+    }
+
+    @Test
+    void concurrentDifferentActualRejectsAndKeepsSettled() throws Exception {
+        JdbcGatewayMetering ledger = newLedger();
+        String period = "2026-11";
+        ledger.putEmployee(period, "alice", 200);
+        ledger.putPool(period, GatewayAccountType.RECON_RESERVE, 100);
+
+        GatewayAttempt attempt = ledger.reserve(new GatewayMetering.ReserveRequest(
+                "req-diff", "turn-diff", "run-diff", "alice", "deepseek", "m", period, 60));
+        assertThat(ledger.beginSend(attempt.id())).isTrue();
+        GatewayAttempt first = ledger.settle(attempt.id(), 70);
+        assertThat(first.status()).isEqualTo(GatewayAttemptStatus.SETTLED);
+
+        assertThatThrownBy(() -> ledger.settle(attempt.id(), 80))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("already settled");
+        assertThat(ledger.listAttempts(GatewayAttemptStatus.PENDING_RECONCILIATION, period, 10)).isEmpty();
+    }
+
+    @Test
     void cancelledAttemptMustNotUnlockFloatForSameTurnId() {
         JdbcGatewayMetering ledger = newLedger();
         String period = "2026-11";

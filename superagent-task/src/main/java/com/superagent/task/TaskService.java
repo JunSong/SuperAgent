@@ -1908,9 +1908,22 @@ public class TaskService implements TaskRecovery {
 
         // The task's spend: our estimate from its tokens, for every CLI; what the CLI says only where we have no price.
         AtomicReference<BigDecimal> estimated = new AtomicReference<>();
+        String cli = task.agentType().cliName();
+        String model = effectiveModel(task);
+        CredentialService.Choice choice = credentials == null ? new CredentialService.Choice(null) : credentials.current(cli);
+        boolean managed = managedRuns != null && managedRuns.managed(cli);
+        // #34: turnId = task.id(); payer = task creator. Managed path injects a run token, never the company Key.
+        // Open before UsageContext so CLI TOKENS share the managed runId with gateway settlements.
+        com.superagent.core.gateway.ManagedRun managedRun = null;
+        com.superagent.core.chat.RunCredential runCredential = choice.credential();
+        if (managed) {
+            managedRun = managedRuns.open(cli, task.id(), task.createdBy(), model);
+            runCredential = managedRun.credential();
+        }
+        String usageSessionId = managedRun != null ? managedRun.credential().id() : null;
         com.superagent.core.usage.UsageContext paying = new com.superagent.core.usage.UsageContext(task.createdBy(),
                 com.superagent.core.usage.UsageContext.SOURCE_TASK,
-                taskAgents == null ? null : taskAgents.agentOf(task.id()).orElse(null), task.id(), null, task.agentType().cliName());
+                taskAgents == null ? null : taskAgents.agentOf(task.id()).orElse(null), task.id(), usageSessionId, cli);
         AgentEventSink sink = timer.tapTools(event -> {
             if (event.type() == AgentEventType.TOKENS) {
                 Double usd = usage == null ? null : usage.record(paying, event.payload());
@@ -1952,17 +1965,6 @@ public class TaskService implements TaskRecovery {
         if (grant != null && isComplex(task)) {
             tools = new ArrayList<>(tools);
             tools.addAll(ComplexTaskMcpTools.ALLOWED);
-        }
-        String cli = task.agentType().cliName();
-        String model = effectiveModel(task);
-        CredentialService.Choice choice = credentials == null ? new CredentialService.Choice(null) : credentials.current(cli);
-        boolean managed = managedRuns != null && managedRuns.managed(cli);
-        // #34: turnId = task.id(); payer = task creator. Managed path injects a run token, never the company Key.
-        com.superagent.core.gateway.ManagedRun managedRun = null;
-        com.superagent.core.chat.RunCredential runCredential = choice.credential();
-        if (managed) {
-            managedRun = managedRuns.open(cli, task.id(), task.createdBy(), model);
-            runCredential = managedRun.credential();
         }
         AgentRunRequest request = new AgentRunRequest(
                 agentSessionId, sessionFirstTurn ? null : agentSessionId, task.workspaceDir(),

@@ -208,8 +208,8 @@ public class TokenUsageService implements UsageRecorder {
 
     private List<UsageRecord> loadForReport(GatewayReportMode mode, String user, Instant from, Instant to) {
         if (mode == GatewayReportMode.GATEWAY_PRIMARY) {
-            // Settlements win for the same managed call; keep historical / unmanaged CLI rows (same CLI OK).
-            // sessionId ≠ turnId, so match shadows by cli + equal total + close timestamps — not by CLI alone.
+            // Settlements are authoritative for a managed run. Shadow CLI only when sessionId equals the
+            // settlement runId (wired at record time). No amount/time heuristics — keep unmatched history.
             List<UsageRecord> settlements = gatewaySettlements.between(user, from, to);
             List<UsageRecord> legacy = store.between(user, from, to).stream()
                     .filter(r -> !UsageContext.SOURCE_GATEWAY.equals(r.source()))
@@ -230,29 +230,28 @@ public class TokenUsageService implements UsageRecorder {
                 .toList();
     }
 
-    /** Same managed call often lands as CLI TOKENS + gateway settlement with the same total near the same time. */
+    /**
+     * Drop a CLI row only when it shares the managed run id ({@link UsageRecord#sessionId()}) with a
+     * settlement. One run may have many attempts — any matching settlement shadows the CLI aggregate.
+     */
     private static boolean shadowedBySettlement(UsageRecord cli, List<UsageRecord> settlements) {
-        if (cli == null || cli.cli() == null || cli.cli().isBlank() || cli.at() == null) {
+        if (cli == null || cli.sessionId() == null || cli.sessionId().isBlank()) {
             return false;
         }
-        long cliTotal = cli.total();
         for (UsageRecord s : settlements) {
-            if (s == null || s.at() == null || s.cli() == null) {
+            if (s == null || s.sessionId() == null || s.sessionId().isBlank()) {
                 continue;
             }
-            if (!cli.cli().equals(s.cli())) {
+            if (!cli.sessionId().equals(s.sessionId())) {
+                continue;
+            }
+            if (cli.cli() != null && s.cli() != null && !cli.cli().equals(s.cli())) {
                 continue;
             }
             if (cli.user() != null && s.user() != null && !cli.user().equals(s.user())) {
                 continue;
             }
-            if (cliTotal != s.total()) {
-                continue;
-            }
-            long seconds = Math.abs(java.time.Duration.between(cli.at(), s.at()).getSeconds());
-            if (seconds <= 300) {
-                return true;
-            }
+            return true;
         }
         return false;
     }
