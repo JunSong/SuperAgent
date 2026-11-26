@@ -18,7 +18,7 @@
 - **QUOTA_BUSY wait**: waits when `available < R` but `available + reserved >= R` (not only `available == 0`).
 - **Account upsert**: `putEmployee` / `putPool` no longer `REPLACE INTO` (preserves in-flight `reserved_tokens`).
 - **RECON mid-month top-up**: scheduled job moves UNALLOCATED → RECON_RESERVE up to company target (never mints).
-- **Usage identity**: `UsageRecord.runId` separate from chat `sessionId` (session rotation + settlement shadow); shadow looks up settlements by runId outside the report window.
+- **Usage identity**: `UsageRecord.runId` separate from chat `sessionId` (session rotation + settlement shadow); shadow looks up settlements by runId outside the report window (batched IN queries — no silent 500-id drop).
 - **markPending**: locked + status-guarded so it cannot overwrite a concurrent SETTLED A.
 
 ## Deferred (not done in this change)

@@ -22,12 +22,23 @@ public interface GatewaySettlementUsage {
     List<UsageRecord> between(String user, Instant from, Instant to);
 
     /**
-     * Run ids among {@code runIds} that already have at least one settlement, regardless of time window.
-     * Used so a CLI row recorded after midnight is still shadowed by a settlement written before midnight.
+     * Settlements for the given run ids, regardless of time window (cli + payer included for shadow matching).
+     * Implementations must not silently drop candidates past a fixed size — batch the IN query instead.
      *
      * @param user payer user id, or null for the whole company
      */
+    default List<UsageRecord> settlementsForRunIds(String user, Collection<String> runIds) {
+        return List.of();
+    }
+
+    /**
+     * Run ids among {@code runIds} that already have at least one settlement, regardless of time window.
+     * Prefer {@link #settlementsForRunIds} when cli/user must be checked.
+     */
     default Set<String> settledRunIds(String user, Collection<String> runIds) {
-        return Set.of();
+        return settlementsForRunIds(user, runIds).stream()
+                .map(UsageRecord::runId)
+                .filter(id -> id != null && !id.isBlank())
+                .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
     }
 }

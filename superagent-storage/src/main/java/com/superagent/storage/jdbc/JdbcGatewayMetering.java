@@ -845,34 +845,57 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
                 e.runId());
     }
 
+    /** Max IN-list size per query — never drop candidates; callers may send thousands of run ids. */
+    static final int SETTLED_RUN_ID_BATCH = 500;
+
     @Override
-    public java.util.Set<String> settledRunIds(String user, java.util.Collection<String> runIds) {
+    public List<UsageRecord> settlementsForRunIds(String user, java.util.Collection<String> runIds) {
         if (runIds == null || runIds.isEmpty()) {
-            return java.util.Set.of();
+            return List.of();
         }
         List<String> ids = runIds.stream()
                 .filter(id -> id != null && !id.isBlank())
                 .distinct()
-                .limit(500)
                 .toList();
         if (ids.isEmpty()) {
-            return java.util.Set.of();
+            return List.of();
         }
-        String placeholders = String.join(",", java.util.Collections.nCopies(ids.size(), "?"));
+        List<UsageRecord> out = new ArrayList<>();
+        for (int from = 0; from < ids.size(); from += SETTLED_RUN_ID_BATCH) {
+            int to = Math.min(from + SETTLED_RUN_ID_BATCH, ids.size());
+            out.addAll(querySettlementsForRunIdsBatch(user, ids.subList(from, to)));
+        }
+        return out;
+    }
+
+    @Override
+    public java.util.Set<String> settledRunIds(String user, java.util.Collection<String> runIds) {
+        return settlementsForRunIds(user, runIds).stream()
+                .map(UsageRecord::runId)
+                .filter(id -> id != null && !id.isBlank())
+                .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
+    }
+
+    private List<UsageRecord> querySettlementsForRunIdsBatch(String user, List<String> batch) {
+        String placeholders = String.join(",", java.util.Collections.nCopies(batch.size(), "?"));
         List<Object> args = new ArrayList<>();
         args.add(TenantSchema.company());
-        args.addAll(ids);
+        args.addAll(batch);
         String byUser = "";
         if (user != null) {
             byUser = " AND payer_user_id = ?";
             args.add(user);
         }
         String sql = """
-                SELECT DISTINCT run_id FROM gateway_projection
+                SELECT id, attempt_id, event_type, line_no, payload_digest, payer_user_id, cli, model,
+                  turn_id, run_id, actual_tokens, at_time
+                FROM gateway_projection
                 WHERE company_id = ? AND event_type = 'settlement'
                   AND run_id IN (%s)
-                """.formatted(placeholders) + byUser;
-        return new java.util.LinkedHashSet<>(jdbc.query(sql, (rs, n) -> rs.getString(1), args.toArray()));
+                """.formatted(placeholders) + byUser + " ORDER BY at_time ASC, line_no ASC";
+        return jdbc.query(sql, PROJECTION, args.toArray()).stream()
+                .map(JdbcGatewayMetering::toUsageRecord)
+                .toList();
     }
 
     /**

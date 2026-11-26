@@ -73,27 +73,53 @@ public class JdbcUsageStore implements UsageStore {
     }
 
     /**
-     * Adds the single-request context column to a table made before it (CREATE TABLE IF NOT EXISTS won't); the rows
-     * already there stay empty, which reads as 0: unknown, so only the turn count decides for them.
+     * Adds a column missing from older tables. Uses information_schema when possible; if two instances race on
+     * ALTER, a duplicate-column error is treated as success after re-checking.
      */
     private void ensureContextColumn(boolean clickHouse) {
-        try {
-            jdbc.queryForList("SELECT context_tokens FROM token_usage WHERE 1 = 0");
-            return;
-        } catch (org.springframework.dao.DataAccessException missing) {
-            // the table predates the column
-        }
-        jdbc.execute("ALTER TABLE token_usage ADD COLUMN context_tokens " + (clickHouse ? "Nullable(Int64)" : "BIGINT"));
+        ensureOptionalColumn("context_tokens", "BIGINT", "Nullable(Int64)", clickHouse);
     }
 
     private void ensureRunIdColumn(boolean clickHouse) {
-        try {
-            jdbc.queryForList("SELECT run_id FROM token_usage WHERE 1 = 0");
+        ensureOptionalColumn("run_id", "VARCHAR(64)", "Nullable(String)", clickHouse);
+    }
+
+    private void ensureOptionalColumn(String column, String mysqlType, String clickHouseType, boolean clickHouse) {
+        if (columnPresent(column, clickHouse)) {
             return;
-        } catch (org.springframework.dao.DataAccessException missing) {
-            // the table predates the column
         }
-        jdbc.execute("ALTER TABLE token_usage ADD COLUMN run_id " + (clickHouse ? "Nullable(String)" : "VARCHAR(64)"));
+        try {
+            jdbc.execute("ALTER TABLE token_usage ADD COLUMN " + column + " "
+                    + (clickHouse ? clickHouseType : mysqlType));
+        } catch (org.springframework.dao.DataAccessException e) {
+            // Concurrent first-boot: the other instance won the race.
+            if (columnPresent(column, clickHouse)) {
+                return;
+            }
+            throw e;
+        }
+    }
+
+    private boolean columnPresent(String column, boolean clickHouse) {
+        if (!clickHouse) {
+            try {
+                Integer present = jdbc.queryForObject(
+                        "SELECT COUNT(*) FROM information_schema.columns "
+                                + "WHERE LOWER(table_name) = 'token_usage' AND LOWER(column_name) = LOWER(?)",
+                        Integer.class, column);
+                if (present != null) {
+                    return present > 0;
+                }
+            } catch (org.springframework.dao.DataAccessException ignored) {
+                // Fall through to SELECT probe (some H2/MySQL setups).
+            }
+        }
+        try {
+            jdbc.queryForList("SELECT " + column + " FROM token_usage WHERE 1 = 0");
+            return true;
+        } catch (org.springframework.dao.DataAccessException missing) {
+            return false;
+        }
     }
 
     @Override

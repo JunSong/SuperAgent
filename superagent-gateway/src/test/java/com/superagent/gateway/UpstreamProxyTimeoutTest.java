@@ -92,6 +92,32 @@ class UpstreamProxyTimeoutTest {
         assertThat(hits.get()).isEqualTo(1);
     }
 
+    @Test
+    void blockedBodyReadIsInterruptedByRequestDeadlineWatcher() throws Exception {
+        // Headers then silence: the reader blocks in InputStream.read until the watchdog closes it.
+        String stubBase = startStub((exchange, out) -> {
+            exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
+            exchange.sendResponseHeaders(200, 0);
+            // Stay quiet long enough for the client deadline; exit early if the client closed.
+            long quietUntil = System.nanoTime() + Duration.ofSeconds(2).toNanos();
+            while (System.nanoTime() < quietUntil) {
+                Thread.sleep(50);
+            }
+        });
+
+        GatewayProxyTimeouts tight = new GatewayProxyTimeouts(
+                Duration.ofSeconds(5),
+                Duration.ofSeconds(2),
+                Duration.ofSeconds(10), // idle longer than request so the absolute deadline wins
+                Duration.ofMillis(400));
+        UpstreamProxy proxy = proxy(stubBase, tight);
+
+        assertThatThrownBy(() -> forward(proxy))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("request timeout");
+        assertThat(hits.get()).isEqualTo(1);
+    }
+
     private String startStub(StubHandler handler) throws IOException {
         hits.set(0);
         stub = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);

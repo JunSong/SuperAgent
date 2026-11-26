@@ -43,6 +43,23 @@ class UsageStoreTest {
     }
 
     @Test
+    void runIdRoundTripsOnSaveAndLoad() {
+        JdbcUsageStore store = new JdbcUsageStore(new JdbcTemplate(new DriverManagerDataSource(
+                "jdbc:h2:mem:usage-runid-" + java.util.UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "")),
+                JdbcUsageStore.MYSQL_DDL);
+        Instant t = Instant.parse("2026-11-26T12:00:00Z");
+        store.save(new UsageRecord("r1", t, "ada", "chat", "dev", null, "session-keep", "deepseek", "m",
+                7, 0, 0, 0, 0, 0, 7, null, null, "managed-run-9"));
+        assertThat(store.latestChatTurn("session-keep")).satisfies(r -> {
+            assertThat(r.sessionId()).isEqualTo("session-keep");
+            assertThat(r.runId()).isEqualTo("managed-run-9");
+            assertThat(r.total()).isEqualTo(7);
+        });
+        assertThat(store.between("ada", t, t.plusSeconds(1))).singleElement()
+                .extracting(UsageRecord::runId).isEqualTo("managed-run-9");
+    }
+
+    @Test
     void addsTheContextColumnToATableMadeBeforeIt() {
         String url = "jdbc:h2:mem:usage-old-" + java.util.UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1";
         JdbcTemplate jdbc = new JdbcTemplate(new DriverManagerDataSource(url, "sa", ""));

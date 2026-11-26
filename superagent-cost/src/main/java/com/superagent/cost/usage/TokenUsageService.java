@@ -221,11 +221,11 @@ public class TokenUsageService implements UsageRecorder {
                     candidateRunIds.add(key);
                 }
             }
-            java.util.Set<String> settledRuns = candidateRunIds.isEmpty()
-                    ? java.util.Set.of()
-                    : gatewaySettlements.settledRunIds(user, candidateRunIds);
+            List<UsageRecord> identity = candidateRunIds.isEmpty()
+                    ? List.of()
+                    : gatewaySettlements.settlementsForRunIds(user, candidateRunIds);
             List<UsageRecord> legacy = legacyCandidates.stream()
-                    .filter(r -> !shadowedBySettledRun(r, settledRuns))
+                    .filter(r -> !shadowedBySettlement(r, identity))
                     .toList();
             if (legacy.isEmpty()) {
                 return settlements;
@@ -259,12 +259,34 @@ public class TokenUsageService implements UsageRecorder {
         return null;
     }
 
-    private static boolean shadowedBySettledRun(UsageRecord cli, java.util.Set<String> settledRuns) {
-        if (cli == null || settledRuns == null || settledRuns.isEmpty()) {
+    /**
+     * Drop a CLI row only when it shares a managed run key with a settlement and matches cli/user
+     * (same guards as the pre-runId shadow path).
+     */
+    static boolean shadowedBySettlement(UsageRecord cli, List<UsageRecord> settlements) {
+        if (cli == null || settlements == null || settlements.isEmpty()) {
             return false;
         }
         String key = shadowKey(cli);
-        return key != null && settledRuns.contains(key);
+        if (key == null) {
+            return false;
+        }
+        for (UsageRecord s : settlements) {
+            if (s == null || s.runId() == null || s.runId().isBlank()) {
+                continue;
+            }
+            if (!key.equals(s.runId())) {
+                continue;
+            }
+            if (cli.cli() != null && s.cli() != null && !cli.cli().equals(s.cli())) {
+                continue;
+            }
+            if (cli.user() != null && s.user() != null && !cli.user().equals(s.user())) {
+                continue;
+            }
+            return true;
+        }
+        return false;
     }
 
     private static List<UsageDtos.Total> latestFirst(List<UsageDtos.Total> rows) {

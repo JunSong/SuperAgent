@@ -203,25 +203,35 @@ class TokenUsageServiceTest {
         UsageRecord settled = new UsageRecord("g-early", settlementAt, "ada",
                 UsageContext.SOURCE_GATEWAY, null, null, null, "deepseek", "deepseek-chat",
                 42, 0, 0, 0, 0, 0, 0, null, null, runId);
-        service.setGatewayReportForTest(() -> GatewayReportMode.GATEWAY_PRIMARY, new com.superagent.core.gateway.GatewaySettlementUsage() {
-            @Override
-            public List<UsageRecord> between(String user, Instant from, Instant to) {
-                return List.of(settled).stream()
-                        .filter(r -> !r.at().isBefore(from) && r.at().isBefore(to))
-                        .toList();
-            }
-
-            @Override
-            public java.util.Set<String> settledRunIds(String user, java.util.Collection<String> runIds) {
-                return runIds.contains(runId) ? java.util.Set.of(runId) : java.util.Set.of();
-            }
-        });
+        service.setGatewayReportForTest(() -> GatewayReportMode.GATEWAY_PRIMARY, settlementsOf(settled));
 
         UsageDtos.Summary both = service.summary("ada", settlementAt.minusSeconds(10), cliAt.plusSeconds(10), ZoneOffset.UTC);
         assertThat(both.total().total()).isEqualTo(42);
 
         UsageDtos.Summary afterOnly = service.summary("ada", boundary, cliAt.plusSeconds(10), ZoneOffset.UTC);
         assertThat(afterOnly.total().total()).isZero();
+    }
+
+    @Test
+    void sessionIdFallbackStillRequiresMatchingCliAndUser() {
+        Instant at = Instant.parse("2026-11-15T12:00:00Z");
+        // Pre-run_id row: managed run id was stuffed into sessionId.
+        rows.add(new UsageRecord("cli-legacy", at, "ada", UsageContext.SOURCE_CHAT, "dev", null,
+                "shared-key", "codex", "cli-model", 42, 0, 0, 0, 0, 0, 0, null, null));
+        UsageRecord settled = new UsageRecord("g1", at, "ada",
+                UsageContext.SOURCE_GATEWAY, null, null, null, "deepseek", "deepseek-chat",
+                42, 0, 0, 0, 0, 0, 0, null, null, "shared-key");
+        service.setGatewayReportForTest(() -> GatewayReportMode.GATEWAY_PRIMARY, settlementsOf(settled));
+
+        // Same key, different CLI → must not shadow.
+        assertThat(service.summary("ada", Instant.EPOCH, Instant.now(), ZoneOffset.UTC).total().total())
+                .isEqualTo(84);
+
+        rows.clear();
+        rows.add(new UsageRecord("cli-match", at, "ada", UsageContext.SOURCE_CHAT, "dev", null,
+                "shared-key", "deepseek", "cli-model", 42, 0, 0, 0, 0, 0, 0, null, null));
+        assertThat(service.summary("ada", Instant.EPOCH, Instant.now(), ZoneOffset.UTC).total().total())
+                .isEqualTo(42);
     }
 
     private static com.superagent.core.gateway.GatewaySettlementUsage settlementsOf(UsageRecord... all) {
@@ -235,14 +245,10 @@ class TokenUsageServiceTest {
             }
 
             @Override
-            public java.util.Set<String> settledRunIds(String user, java.util.Collection<String> runIds) {
-                java.util.Set<String> out = new java.util.LinkedHashSet<>();
-                for (UsageRecord r : list) {
-                    if (r.runId() != null && runIds.contains(r.runId())) {
-                        out.add(r.runId());
-                    }
-                }
-                return out;
+            public List<UsageRecord> settlementsForRunIds(String user, java.util.Collection<String> runIds) {
+                return list.stream()
+                        .filter(r -> r.runId() != null && runIds.contains(r.runId()))
+                        .toList();
             }
         };
     }

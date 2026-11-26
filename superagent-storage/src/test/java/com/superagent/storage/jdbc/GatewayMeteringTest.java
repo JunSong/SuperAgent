@@ -83,6 +83,44 @@ class GatewayMeteringTest {
     }
 
     @Test
+    void settledRunIdsMustNotSilentlyDropPastBatchBoundary() {
+        JdbcGatewayMetering ledger = newLedger();
+        String period = "2026-11";
+        int total = JdbcGatewayMetering.SETTLED_RUN_ID_BATCH + 1; // 501
+        ledger.putEmployee(period, "alice", total * 2L);
+        java.util.List<String> runIds = new java.util.ArrayList<>(total);
+        for (int i = 0; i < total; i++) {
+            String runId = "run-" + i;
+            runIds.add(runId);
+            GatewayAttempt a = ledger.reserve(new GatewayMetering.ReserveRequest(
+                    "req-" + i, "turn-" + i, runId, "alice", "deepseek", "m", period, 1));
+            assertThat(ledger.beginSend(a.id())).isTrue();
+            assertThat(ledger.settle(a.id(), 1).status()).isEqualTo(GatewayAttemptStatus.SETTLED);
+        }
+        assertThat(ledger.settledRunIds("alice", java.util.List.of(runIds.get(total - 1))))
+                .containsExactly(runIds.get(total - 1));
+        assertThat(ledger.settledRunIds("alice", runIds)).hasSize(total).containsAll(runIds);
+
+        // Two full batches + one: still complete, and an unsettled id stays out.
+        int bigger = JdbcGatewayMetering.SETTLED_RUN_ID_BATCH * 2 + 1; // 1001
+        ledger.putEmployee(period, "bob", bigger * 2L);
+        java.util.List<String> more = new java.util.ArrayList<>(bigger + 1);
+        for (int i = 0; i < bigger; i++) {
+            String runId = "bob-run-" + i;
+            more.add(runId);
+            GatewayAttempt a = ledger.reserve(new GatewayMetering.ReserveRequest(
+                    "breq-" + i, "bturn-" + i, runId, "bob", "deepseek", "m", period, 1));
+            assertThat(ledger.beginSend(a.id())).isTrue();
+            assertThat(ledger.settle(a.id(), 1).status()).isEqualTo(GatewayAttemptStatus.SETTLED);
+        }
+        more.add("never-settled");
+        assertThat(ledger.settledRunIds("bob", more)).hasSize(bigger).containsAll(more.subList(0, bigger))
+                .doesNotContain("never-settled");
+        // Payer boundary: bob's runs must not match alice's query.
+        assertThat(ledger.settledRunIds("alice", more)).isEmpty();
+    }
+
+    @Test
     void markPendingMustNotOverwriteSettledActual() {
         JdbcGatewayMetering ledger = newLedger();
         String period = "2026-11";
@@ -101,6 +139,68 @@ class GatewayMeteringTest {
         GatewayAttempt after = ledger.markPending(attempt.id(), 999);
         assertThat(after.status()).isEqualTo(GatewayAttemptStatus.SETTLED);
         assertThat(after.actualTokens()).isEqualTo(65);
+    }
+
+    @Test
+    void concurrentMarkPendingMustNotOverwriteSettledActual() throws Exception {
+        JdbcGatewayMetering ledger = newLedger();
+        String period = "2026-11";
+        ledger.putEmployee(period, "alice", 200);
+        ledger.putPool(period, GatewayAccountType.RECON_RESERVE, 100);
+        GatewayAttempt attempt = ledger.reserve(new GatewayMetering.ReserveRequest(
+                "req-race", "turn-race", "run-race", "alice", "deepseek", "m", period, 60));
+        assertThat(ledger.beginSend(attempt.id())).isTrue();
+        ledger.markPending(attempt.id(), 70);
+
+        java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(2);
+        java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(2);
+        java.util.concurrent.atomic.AtomicReference<GatewayAttempt> settledRef =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<GatewayAttempt> pendingRef =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<Throwable> error =
+                new java.util.concurrent.atomic.AtomicReference<>();
+
+        Thread settle = new Thread(() -> TenantContext.run(InCompany.ID, () -> {
+            start.countDown();
+            try {
+                start.await(2, java.util.concurrent.TimeUnit.SECONDS);
+                settledRef.set(ledger.settle(attempt.id(), 65));
+            } catch (Throwable t) {
+                error.compareAndSet(null, t);
+            } finally {
+                done.countDown();
+            }
+        }));
+        Thread latePending = new Thread(() -> TenantContext.run(InCompany.ID, () -> {
+            start.countDown();
+            try {
+                start.await(2, java.util.concurrent.TimeUnit.SECONDS);
+                // Busy-spin a bit so settle often wins the lock first; either order must end SETTLED@65.
+                for (int i = 0; i < 20; i++) {
+                    pendingRef.set(ledger.markPending(attempt.id(), 999));
+                    if (pendingRef.get().status() == GatewayAttemptStatus.SETTLED) {
+                        break;
+                    }
+                    Thread.yield();
+                }
+            } catch (Throwable t) {
+                error.compareAndSet(null, t);
+            } finally {
+                done.countDown();
+            }
+        }));
+        settle.start();
+        latePending.start();
+        assertThat(done.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        assertThat(error.get()).isNull();
+        assertThat(settledRef.get()).isNotNull();
+        assertThat(settledRef.get().status()).isEqualTo(GatewayAttemptStatus.SETTLED);
+        assertThat(settledRef.get().actualTokens()).isEqualTo(65);
+        GatewayAttempt finalState = ledger.markPending(attempt.id(), 1234);
+        assertThat(finalState.status()).isEqualTo(GatewayAttemptStatus.SETTLED);
+        assertThat(finalState.actualTokens()).isEqualTo(65);
+        assertThat(ledger.listProjections(period, 10)).hasSize(1);
     }
 
     @Test
