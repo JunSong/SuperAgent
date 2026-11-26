@@ -27,6 +27,7 @@ class TokenUsageServiceTest {
     private final List<UsageRecord> rows = new ArrayList<>();
     private final UsageStore store = new UsageStore() {
         @Override public void save(UsageRecord r) { rows.add(r); }
+        @Override public UsageRecord latestChatTurn(String sessionId) { return null; }
         @Override public List<UsageRecord> forTask(String taskId) { return rows.stream().filter(r -> taskId.equals(r.taskId())).toList(); }
         @Override public List<UsageRecord> between(String user, Instant from, Instant to) {
             return rows.stream().filter(r -> user == null || user.equals(r.user())).toList();
@@ -183,9 +184,9 @@ class TokenUsageServiceTest {
         when(prices.price("m")).thenReturn(Optional.of(new ModelPriceService.Price(1, 1, null, null, "x")));
         Instant now = Instant.now();
         rows.add(new UsageRecord("r1", now, "ada", "task", null, "t1", "p-left", null, "claude", "m",
-                100, 0, 0, 0, 0, 0, 0.1, null));
+                100, 0, 0, 0, 0, 0, 0, 0.1, null));
         rows.add(new UsageRecord("r2", now, "ada", "chat", "dev", null, "p-still", null, "claude", "m",
-                200, 0, 0, 0, 0, 0, 0.2, null));
+                200, 0, 0, 0, 0, 0, 0, 0.2, null));
 
         com.superagent.core.project.ProjectAccess access = mock(com.superagent.core.project.ProjectAccess.class);
         when(access.projectsOf("ada")).thenReturn(List.of(
@@ -215,7 +216,7 @@ class TokenUsageServiceTest {
     void personalUsageDoesNotFallBackToCompanyProjectStoreWithoutAccess() {
         Instant now = Instant.now();
         rows.add(new UsageRecord("r1", now, "ada", "task", null, "t1", "p1", null, "claude", "m",
-                100, 0, 0, 0, 0, 0, 0.1, null));
+                100, 0, 0, 0, 0, 0, 0, 0.1, null));
         // No ProjectAccess: personal view must not read ProjectStore.list() for live names.
         com.superagent.core.project.ProjectStore projectStore = mock(com.superagent.core.project.ProjectStore.class);
         when(projectStore.list()).thenReturn(List.of(

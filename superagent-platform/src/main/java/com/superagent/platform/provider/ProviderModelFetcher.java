@@ -315,7 +315,7 @@ public class ProviderModelFetcher {
             // Like a run: a hand-set provider in the machine's config.toml (or a broken one) mustn't decide the list.
             argv.addAll(List.of("-c", "model_provider=\"openai\""));
         }
-        JsonNode root = mapper.readTree(run(argv, 60));
+        JsonNode root = mapper.readTree(run(argv, 60, credential == null));
         List<ProviderModelDto> out = new ArrayList<>();
         for (JsonNode m : root.path("models")) {
             if ("hide".equals(m.path("visibility").asText())) {
@@ -474,18 +474,29 @@ public class ProviderModelFetcher {
      * because a large output (codex's catalogue is ~600KB) would otherwise fill the pipe and hang.
      */
     private String run(List<String> argv, int timeoutSeconds) throws IOException, InterruptedException {
-        return run(argv, timeoutSeconds, java.util.Map.of());
+        return run(argv, timeoutSeconds, java.util.Map.of(), false);
     }
 
-    /**
-     * The same, with variables for the child: a CLI that authenticates through its environment (Qoder's personal
-     * access token) needs them, and its stderr says why it refused — which is what the caller reports.
-     */
+    private String run(List<String> argv, int timeoutSeconds, boolean codexLogin)
+            throws IOException, InterruptedException {
+        return run(argv, timeoutSeconds, java.util.Map.of(), codexLogin);
+    }
+
+    /** Child environment supports CLIs such as Qoder that authenticate through their personal access token. */
     private String run(List<String> argv, int timeoutSeconds, java.util.Map<String, String> env)
+            throws IOException, InterruptedException {
+        return run(argv, timeoutSeconds, env, false);
+    }
+
+    private String run(List<String> argv, int timeoutSeconds, java.util.Map<String, String> env, boolean codexLogin)
             throws IOException, InterruptedException {
         ProcessBuilder pb = new ProcessBuilder(argv).redirectError(ProcessBuilder.Redirect.PIPE);
         pb.environment().put("PATH", String.join(File.pathSeparator, probe.searchPath()));
         pb.environment().putAll(env);
+        if (codexLogin) {
+            pb.environment().remove("CODEX_API_KEY");
+            pb.environment().remove("OPENAI_API_KEY");
+        }
         Process p = pb.start();
         CompletableFuture<byte[]> stdout = CompletableFuture.supplyAsync(() -> readAll(p.getInputStream()));
         CompletableFuture<byte[]> stderr = CompletableFuture.supplyAsync(() -> readAll(p.getErrorStream()));

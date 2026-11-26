@@ -140,8 +140,8 @@ public class TokenUsageService implements UsageRecorder {
             Double usd = cost(u);
             store.save(new UsageRecord(UUID.randomUUID().toString(), now, context.user(), context.source(),
                     context.agentId(), context.taskId(), projectId, context.sessionId(), context.cli(), u.model(),
-                    u.input(), u.cacheRead(), u.cacheWrite(), u.cacheWrite1h(), u.output(), u.reasoning(), usd,
-                    u.cliCostUsd()));
+                    u.input(), u.cacheRead(), u.cacheWrite(), u.cacheWrite1h(), u.output(), u.reasoning(),
+                    u.contextTokens(), usd, u.cliCostUsd()));
             if (usd != null) {
                 total = (total == null ? 0 : total) + usd;
             }
@@ -153,7 +153,7 @@ public class TokenUsageService implements UsageRecorder {
     public void recordCost(UsageContext context, String model, double usd) {
         store.save(new UsageRecord(UUID.randomUUID().toString(), Instant.now(), context.user(), context.source(),
                 context.agentId(), context.taskId(), projectOf(context), context.sessionId(), context.cli(), model,
-                0, 0, 0, 0, 0, 0, usd, null));
+                0, 0, 0, 0, 0, 0, 0, usd, null));
     }
 
     /** USD by list price; null when the model has none. */
