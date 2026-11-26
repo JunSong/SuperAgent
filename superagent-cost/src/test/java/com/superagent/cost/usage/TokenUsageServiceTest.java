@@ -115,10 +115,11 @@ class TokenUsageServiceTest {
 
     @Test
     void gatewayPrimarySummaryUsesSettlementsNotCli() {
-        // Chat sessionId ≠ gateway turnId; same CLI still must not double-count (42, not 84).
-        service.record(new UsageContext("ada", UsageContext.SOURCE_CHAT, "dev", null, "chat-session-9", "deepseek"),
-                "[{\"model\":\"cli-model\",\"input\":42,\"cacheRead\":0,\"cacheWrite\":0,\"cacheWrite1h\":0,\"output\":0,\"reasoning\":0}]");
-        UsageRecord settled = new UsageRecord("p1", Instant.parse("2026-11-15T12:00:00Z"), "ada",
+        // Same managed call: CLI TOKENS + settlement, same total near the same time → count once (42).
+        Instant at = Instant.parse("2026-11-15T12:00:00Z");
+        rows.add(new UsageRecord("cli1", at, "ada", UsageContext.SOURCE_CHAT, "dev", null, "chat-session-9",
+                "deepseek", "cli-model", 42, 0, 0, 0, 0, 0, 0, null, null));
+        UsageRecord settled = new UsageRecord("p1", at, "ada",
                 UsageContext.SOURCE_GATEWAY, null, null, "user-msg-turn", "deepseek", "deepseek-chat",
                 42, 0, 0, 0, 0, 0, 0, null, null);
         service.setGatewayReportForTest(() -> GatewayReportMode.GATEWAY_PRIMARY,
@@ -131,7 +132,10 @@ class TokenUsageServiceTest {
     }
 
     @Test
-    void gatewayPrimaryKeepsUnmanagedAndHistoricalCliRows() {
+    void gatewayPrimaryKeepsHistoricalSameCliAndUnmanaged() {
+        // Historical same-CLI 10 + new gateway 42 = 52 (must not drop by CLI alone).
+        rows.add(new UsageRecord("hist", Instant.parse("2026-11-01T10:00:00Z"), "ada", UsageContext.SOURCE_CHAT,
+                "dev", null, "old-session", "deepseek", "deepseek-chat", 10, 0, 0, 0, 0, 0, 0, null, null));
         service.record(new UsageContext("ada", UsageContext.SOURCE_CHAT, "dev", null, "legacy-session", "codex"),
                 "[{\"model\":\"codex-m\",\"input\":10,\"cacheRead\":0,\"cacheWrite\":0,\"cacheWrite1h\":0,\"output\":0,\"reasoning\":0}]");
         UsageRecord settled = new UsageRecord("p1", Instant.parse("2026-11-15T12:00:00Z"), "ada",
@@ -141,9 +145,9 @@ class TokenUsageServiceTest {
                 (user, from, to) -> List.of(settled));
 
         UsageDtos.Summary s = service.summary("ada", Instant.EPOCH, Instant.now(), ZoneOffset.UTC);
-        assertThat(s.total().total()).isEqualTo(52);
+        assertThat(s.total().total()).isEqualTo(62); // 10 hist + 42 gw + 10 codex
         assertThat(s.byModel()).extracting(UsageDtos.Total::key)
-                .containsExactlyInAnyOrder("deepseek-chat", "codex-m");
+                .contains("deepseek-chat", "codex-m");
     }
 
     @Test

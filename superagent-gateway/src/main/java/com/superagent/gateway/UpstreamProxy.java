@@ -103,7 +103,7 @@ public class UpstreamProxy {
             java.util.function.BiConsumer<Integer, String> onResponseHeaders) throws IOException, InterruptedException {
         String normalizedSuffix = GatewayRoutePolicy.normalizeSuffix(suffix);
         GatewayRoutePolicy.assertAllowed(protocol, method, normalizedSuffix, grant.model(), body);
-        ReservationEstimator.Prepared prepared = ReservationEstimator.prepare(body);
+        ReservationEstimator.Prepared prepared = ReservationEstimator.prepare(body, protocol, normalizedSuffix);
         try {
             return TenantContext.call(grant.companyId(), () -> {
                 GatewayAttempt attempt = null;

@@ -5,20 +5,21 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 
 /**
  * Conservative R before hard tokenizer evidence (#34 §4): body bytes/4 as input upper bound
- * plus a capped slice of the request's output cap (or a floor).
+ * plus a capped slice of the request's output cap (or a floor when the request omits one).
  *
- * <p>Rewrites outbound output fields ({@code max_tokens} / {@code max_output_tokens} /
- * {@code max_completion_tokens}) so the upstream cannot emit more than what was reserved.
- * When the request omits every output cap, injects them at the reserved floor.
+ * <p>Rewrites only the protocol-appropriate output field so the upstream cannot emit more than
+ * reserved — never raises a caller-declared cap, and never injects foreign fields.
  */
 final class ReservationEstimator {
 
     private static final ObjectMapper JSON = new ObjectMapper();
+    /** Reserved when the request omits every output cap (hard ceiling for uncapped calls). */
     private static final long OUTPUT_FLOOR = 256;
-    /** Practical reserve ceiling for declared max_tokens / max_output_tokens / max_completion_tokens. */
+    /** Practical reserve ceiling for declared output caps. */
     static final long OUTPUT_RESERVE_CAP = 32_768;
     private static final String[] OUTPUT_FIELDS = {"max_tokens", "max_output_tokens", "max_completion_tokens"};
 
@@ -29,13 +30,18 @@ final class ReservationEstimator {
     }
 
     static long estimate(byte[] body) {
-        return prepare(body).reservedTokens();
+        return prepare(body, ModelRunGrants.PROTOCOL_OPENAI, "/v1/chat/completions").reservedTokens();
+    }
+
+    static Prepared prepare(byte[] body) {
+        return prepare(body, ModelRunGrants.PROTOCOL_OPENAI, "/v1/chat/completions");
     }
 
     /**
-     * Computes R and returns a body whose output fields are clamped (or injected) to the reserved output slice.
+     * @param protocol {@link ModelRunGrants#PROTOCOL_ANTHROPIC} / {@link ModelRunGrants#PROTOCOL_OPENAI}
+     * @param path     normalized gateway suffix (e.g. {@code /v1/messages}, {@code /v1/responses})
      */
-    static Prepared prepare(byte[] body) {
+    static Prepared prepare(byte[] body, String protocol, String path) {
         long input = body == null ? 0 : Math.max(1, (body.length + 3) / 4);
         long output = OUTPUT_FLOOR;
         byte[] outbound = body == null ? new byte[0] : body;
@@ -44,10 +50,11 @@ final class ReservationEstimator {
                 JsonNode root = JSON.readTree(body);
                 long declared = firstPositive(root, OUTPUT_FIELDS);
                 if (declared > 0) {
-                    output = Math.min(OUTPUT_RESERVE_CAP, Math.max(OUTPUT_FLOOR, declared));
+                    // Never raise a caller-declared cap (P2); only clamp down to the reserve ceiling.
+                    output = Math.min(OUTPUT_RESERVE_CAP, declared);
                 }
                 if (root instanceof ObjectNode obj) {
-                    boolean changed = applyOutputCap(obj, output);
+                    boolean changed = applyOutputCap(obj, output, protocol, path);
                     if (changed) {
                         outbound = JSON.writeValueAsBytes(obj);
                     }
@@ -59,27 +66,47 @@ final class ReservationEstimator {
         return new Prepared(input + output, outbound, output);
     }
 
-    /** Clamp existing output fields; if none exist, inject all three so no protocol path is uncapped. */
-    private static boolean applyOutputCap(ObjectNode obj, long output) {
+    /**
+     * Clamp only fields the request already carries. If none, inject exactly one field chosen by
+     * protocol/path (Anthropic → max_tokens, Responses → max_output_tokens, Chat → max_tokens
+     * unless max_completion_tokens was the natural choice).
+     */
+    private static boolean applyOutputCap(ObjectNode obj, long output, String protocol, String path) {
         boolean anyPresent = false;
         boolean changed = false;
         for (String f : OUTPUT_FIELDS) {
-            if (obj.has(f)) {
-                anyPresent = true;
-                JsonNode n = obj.get(f);
-                if (!n.isNumber() || n.asLong() != output) {
-                    obj.put(f, output);
-                    changed = true;
-                }
+            if (!obj.has(f)) {
+                continue;
+            }
+            anyPresent = true;
+            JsonNode n = obj.get(f);
+            if (!n.isNumber() || n.asLong() != output) {
+                obj.put(f, output);
+                changed = true;
             }
         }
         if (!anyPresent) {
-            for (String f : OUTPUT_FIELDS) {
-                obj.put(f, output);
-            }
+            String field = preferredOutputField(protocol, path, obj);
+            obj.put(field, output);
             changed = true;
         }
         return changed;
+    }
+
+    static String preferredOutputField(String protocol, String path, JsonNode root) {
+        String p = protocol == null ? "" : protocol.toLowerCase(Locale.ROOT);
+        String suffix = path == null ? "" : path.toLowerCase(Locale.ROOT);
+        if (ModelRunGrants.PROTOCOL_ANTHROPIC.equals(p)) {
+            return "max_tokens";
+        }
+        if (suffix.contains("responses")) {
+            return "max_output_tokens";
+        }
+        // OpenAI Chat Completions: prefer max_completion_tokens only when already present.
+        if (root != null && root.has("max_completion_tokens")) {
+            return "max_completion_tokens";
+        }
+        return "max_tokens";
     }
 
     private static long firstPositive(JsonNode root, String... fields) {

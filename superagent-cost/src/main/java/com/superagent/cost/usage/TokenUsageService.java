@@ -208,18 +208,12 @@ public class TokenUsageService implements UsageRecorder {
 
     private List<UsageRecord> loadForReport(GatewayReportMode mode, String user, Instant from, Instant to) {
         if (mode == GatewayReportMode.GATEWAY_PRIMARY) {
-            // Settlements are authoritative for managed CLIs. Chat sessionId ≠ gateway turnId, so do not
-            // dedupe on that field — drop store rows whose CLI already has a settlement in-range instead.
+            // Settlements win for the same managed call; keep historical / unmanaged CLI rows (same CLI OK).
+            // sessionId ≠ turnId, so match shadows by cli + equal total + close timestamps — not by CLI alone.
             List<UsageRecord> settlements = gatewaySettlements.between(user, from, to);
-            java.util.HashSet<String> settledClis = new java.util.HashSet<>();
-            for (UsageRecord r : settlements) {
-                if (r.cli() != null && !r.cli().isBlank()) {
-                    settledClis.add(r.cli());
-                }
-            }
             List<UsageRecord> legacy = store.between(user, from, to).stream()
                     .filter(r -> !UsageContext.SOURCE_GATEWAY.equals(r.source()))
-                    .filter(r -> r.cli() == null || r.cli().isBlank() || !settledClis.contains(r.cli()))
+                    .filter(r -> !shadowedBySettlement(r, settlements))
                     .toList();
             if (legacy.isEmpty()) {
                 return settlements;
@@ -234,6 +228,33 @@ public class TokenUsageService implements UsageRecorder {
         return store.between(user, from, to).stream()
                 .filter(r -> !UsageContext.SOURCE_GATEWAY.equals(r.source()))
                 .toList();
+    }
+
+    /** Same managed call often lands as CLI TOKENS + gateway settlement with the same total near the same time. */
+    private static boolean shadowedBySettlement(UsageRecord cli, List<UsageRecord> settlements) {
+        if (cli == null || cli.cli() == null || cli.cli().isBlank() || cli.at() == null) {
+            return false;
+        }
+        long cliTotal = cli.total();
+        for (UsageRecord s : settlements) {
+            if (s == null || s.at() == null || s.cli() == null) {
+                continue;
+            }
+            if (!cli.cli().equals(s.cli())) {
+                continue;
+            }
+            if (cli.user() != null && s.user() != null && !cli.user().equals(s.user())) {
+                continue;
+            }
+            if (cliTotal != s.total()) {
+                continue;
+            }
+            long seconds = Math.abs(java.time.Duration.between(cli.at(), s.at()).getSeconds());
+            if (seconds <= 300) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static List<UsageDtos.Total> latestFirst(List<UsageDtos.Total> rows) {

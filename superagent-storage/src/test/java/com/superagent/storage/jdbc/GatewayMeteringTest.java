@@ -161,6 +161,39 @@ class GatewayMeteringTest {
         });
     }
 
+    @Test
+    void concurrentOverageDoesNotStealSiblingFreeze() {
+        JdbcGatewayMetering ledger = newLedger();
+        String period = "2026-11";
+        ledger.putEmployee(period, "alice", 200);
+        ledger.putPool(period, com.superagent.core.gateway.GatewayAccountType.RECON_RESERVE, 10); // covers one overage of 10
+
+        GatewayAttempt a = ledger.reserve(new GatewayMetering.ReserveRequest(
+                "req-a", "ta", "ra", "alice", "deepseek", "m", period, 60));
+        GatewayAttempt b = ledger.reserve(new GatewayMetering.ReserveRequest(
+                "req-b", "tb", "rb", "alice", "deepseek", "m", period, 60));
+        assertThat(ledger.beginSend(a.id())).isTrue();
+        assertThat(ledger.beginSend(b.id())).isTrue();
+        assertThat(ledger.findEmployee(period, "alice")).hasValueSatisfying(acc ->
+                assertThat(acc.reserved()).isEqualTo(120));
+
+        GatewayAttempt settledA = ledger.settle(a.id(), 70); // needs overage 10 — takes the pool
+        assertThat(settledA.status()).isEqualTo(GatewayAttemptStatus.SETTLED);
+        GatewayAttempt pendingB = ledger.settle(b.id(), 70); // RECON empty — must keep its own freeze
+        assertThat(pendingB.status()).isEqualTo(GatewayAttemptStatus.PENDING_RECONCILIATION);
+        assertThat(pendingB.actualTokens()).isEqualTo(70);
+        assertThat(ledger.findEmployee(period, "alice")).hasValueSatisfying(acc -> {
+            assertThat(acc.reserved()).isEqualTo(60); // B's freeze intact; A released
+            assertThat(acc.settled()).isEqualTo(60);
+        });
+
+        // Retry B without funding RECON — must not consume the remaining freeze again.
+        GatewayAttempt stillPending = ledger.settle(b.id(), 70);
+        assertThat(stillPending.status()).isEqualTo(GatewayAttemptStatus.PENDING_RECONCILIATION);
+        assertThat(ledger.findEmployee(period, "alice")).hasValueSatisfying(acc ->
+                assertThat(acc.reserved()).isEqualTo(60));
+    }
+
     private static JdbcGatewayMetering newLedger() {
         return new JdbcGatewayMetering(new JdbcTemplate(new DriverManagerDataSource(
                 "jdbc:h2:mem:gw-meter-" + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "")));

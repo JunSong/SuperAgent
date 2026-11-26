@@ -395,8 +395,9 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
             long employeeCharge = Math.min(a, r);
             long overage = a - employeeCharge;
             long refund = r - employeeCharge;
-            if (overage > 0 && !canDebitReconReserve(company, current.period(), overage)) {
-                // Keep the freeze; persist A so reconcile still sees the vendor total.
+            // Debit RECON before releasing the employee freeze so a concurrent drain cannot leave us
+            // charged-but-pending (which would steal another attempt's reserved on retry).
+            if (overage > 0 && !tryDebitReconReserve(company, current.period(), overage, attemptId)) {
                 jdbc.update("""
                         UPDATE gateway_attempt SET status = ?, actual_tokens = ?
                         WHERE company_id = ? AND id = ?
@@ -415,18 +416,11 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
                     refund, r, employeeCharge, company, current.period(), GatewayAccountType.EMPLOYEE.name(),
                     current.payerUserId(), r);
             if (moved == 0) {
+                // RECON already taken for overage — refund it so we do not leak company reserve.
+                if (overage > 0) {
+                    creditPool(company, current.period(), GatewayAccountType.RECON_RESERVE, overage);
+                }
                 throw new IllegalStateException("account reserved balance missing for attempt " + attemptId);
-            }
-            if (overage > 0 && !tryDebitReconReserve(company, current.period(), overage, attemptId)) {
-                // Race: reserve looked funded then emptied — keep A, restore nothing (employee already charged).
-                jdbc.update("""
-                        UPDATE gateway_attempt SET status = ?, actual_tokens = ?
-                        WHERE company_id = ? AND id = ?
-                        """,
-                        GatewayAttemptStatus.PENDING_RECONCILIATION.name(), a, company, attemptId);
-                writeLedger(company, "settle-pending:" + attemptId, 1, current.period(), current.payerUserId(),
-                        refund, -r, employeeCharge, "SETTLE_PENDING_OVERAGE", attemptId, null);
-                return requireAttempt(company, attemptId);
             }
             jdbc.update("""
                     UPDATE gateway_attempt SET status = ?, actual_tokens = ?
@@ -797,13 +791,6 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
         return n != null && n > 0;
     }
 
-    private boolean canDebitReconReserve(String company, String period, long overage) {
-        ensurePoolRow(company, period, GatewayAccountType.RECON_RESERVE);
-        return findAccount(period, GatewayAccountType.RECON_RESERVE, POOL_OWNER)
-                .filter(p -> p.available() >= overage)
-                .isPresent();
-    }
-
     /** Debits RECON_RESERVE for A−R; returns false when the pool cannot cover (caller keeps PENDING + A). */
     private boolean tryDebitReconReserve(String company, String period, long overage, String attemptId) {
         ensurePoolRow(company, period, GatewayAccountType.RECON_RESERVE);
@@ -819,6 +806,15 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
         writeLedger(company, "overage:" + attemptId, 1, period, POOL_OWNER,
                 -overage, 0, 0, "OVERAGE", attemptId, digest("overage", attemptId, overage));
         return true;
+    }
+
+    private void creditPool(String company, String period, GatewayAccountType type, long amount) {
+        ensurePoolRow(company, period, type);
+        jdbc.update("""
+                UPDATE gateway_account SET available_tokens = available_tokens + ?
+                WHERE company_id = ? AND period = ? AND account_type = ? AND owner_id = ?
+                """,
+                amount, company, period, type.name(), POOL_OWNER);
     }
 
     private void debitPoolIfPresent(String company, String period, GatewayAccountType type, long amount) {
