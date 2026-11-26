@@ -911,28 +911,36 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
         }
     }
 
+    /**
+     * Idempotent insert of a zero pool row. Uses {@code ON DUPLICATE KEY UPDATE} so concurrent
+     * first-touch allocate / fund paths do not 500 on duplicate PK (I-1).
+     */
     private void ensurePoolRow(String company, String period, GatewayAccountType type) {
-        jdbc.update("""
-                INSERT INTO gateway_account (company_id, period, account_type, owner_id, quota_mode,
-                  available_tokens, reserved_tokens, settled_tokens, base_quota, float_allowance, float_turn_id)
-                SELECT ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, NULL
-                WHERE NOT EXISTS (
-                  SELECT 1 FROM gateway_account WHERE company_id = ? AND period = ? AND account_type = ? AND owner_id = ?)
-                """,
-                company, period, type.name(), POOL_OWNER, GatewayQuotaMode.LIMITED.name(),
-                company, period, type.name(), POOL_OWNER);
+        try {
+            jdbc.update("""
+                    INSERT INTO gateway_account (company_id, period, account_type, owner_id, quota_mode,
+                      available_tokens, reserved_tokens, settled_tokens, base_quota, float_allowance, float_turn_id)
+                    VALUES (?, ?, ?, ?, ?, 0, 0, 0, 0, 0, NULL)
+                    ON DUPLICATE KEY UPDATE owner_id = owner_id
+                    """,
+                    company, period, type.name(), POOL_OWNER, GatewayQuotaMode.LIMITED.name());
+        } catch (DuplicateKeyException ignored) {
+            // Concurrent insert won the race; row exists.
+        }
     }
 
     private void ensureEmployeeRow(String company, String period, String userId) {
-        jdbc.update("""
-                INSERT INTO gateway_account (company_id, period, account_type, owner_id, quota_mode,
-                  available_tokens, reserved_tokens, settled_tokens, base_quota, float_allowance, float_turn_id)
-                SELECT ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, NULL
-                WHERE NOT EXISTS (
-                  SELECT 1 FROM gateway_account WHERE company_id = ? AND period = ? AND account_type = ? AND owner_id = ?)
-                """,
-                company, period, GatewayAccountType.EMPLOYEE.name(), userId, GatewayQuotaMode.LIMITED.name(),
-                company, period, GatewayAccountType.EMPLOYEE.name(), userId);
+        try {
+            jdbc.update("""
+                    INSERT INTO gateway_account (company_id, period, account_type, owner_id, quota_mode,
+                      available_tokens, reserved_tokens, settled_tokens, base_quota, float_allowance, float_turn_id)
+                    VALUES (?, ?, ?, ?, ?, 0, 0, 0, 0, 0, NULL)
+                    ON DUPLICATE KEY UPDATE owner_id = owner_id
+                    """,
+                    company, period, GatewayAccountType.EMPLOYEE.name(), userId, GatewayQuotaMode.LIMITED.name());
+        } catch (DuplicateKeyException ignored) {
+            // Concurrent insert won the race; row exists.
+        }
     }
 
     /** @return true if this operation_id already completed with the same digest (idempotent replay). */
@@ -953,13 +961,16 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
     }
 
     private long lockPoolAvailable(String company, String period, GatewayAccountType type) {
-        Long avail = jdbc.queryForObject("""
+        List<Long> rows = jdbc.query("""
                 SELECT available_tokens FROM gateway_account
                 WHERE company_id = ? AND period = ? AND account_type = ? AND owner_id = ?
                 FOR UPDATE
                 """,
-                Long.class, company, period, type.name(), POOL_OWNER);
-        return avail == null ? 0L : avail;
+                (rs, n) -> rs.getLong(1), company, period, type.name(), POOL_OWNER);
+        if (rows.isEmpty()) {
+            throw new IllegalStateException("pool row missing after ensure: " + type);
+        }
+        return rows.getFirst();
     }
 
     private void writeLedger(String company, String operationId, int entryNo, String period,

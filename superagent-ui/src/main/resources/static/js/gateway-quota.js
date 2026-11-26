@@ -67,7 +67,8 @@ const GQ_FALLBACK_CLIS = [
   { key: "qoder", name: "Qoder" },
 ];
 
-const GQ_POOL_TYPES = ["UNALLOCATED", "FLOAT_POOL", "RECON_RESERVE"];
+/** Writable via PUT /pools. RECON_RESERVE is funded from UNALLOCATED (allocate / policy). */
+const GQ_POOL_TYPES = ["UNALLOCATED", "FLOAT_POOL"];
 
 let gqCatalogClis = null;
 let gqDefaultFloat = 100000;

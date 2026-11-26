@@ -94,12 +94,25 @@ public class GatewayBudgetController {
         return ApiResponse.ok(toBalance(a));
     }
 
+    /**
+     * Seed company cash pools only. {@link GatewayAccountType#RECON_RESERVE} must be topped up via
+     * {@link GatewayMetering#fundReconReserveToTarget} (allocate / PUT policy) — never REPLACE/mint here.
+     */
     @PutMapping(ApiPaths.GATEWAY_ADMIN + "/pools")
     public ApiResponse<GatewayBudgetDtos.Balance> putPool(@RequestBody GatewayBudgetDtos.PutPoolRequest body) {
         if (body == null || body.type() == null) {
             throw new IllegalArgumentException("type is required");
         }
-        GatewayAccountType type = GatewayAccountType.valueOf(body.type());
+        GatewayAccountType type;
+        try {
+            type = GatewayAccountType.valueOf(body.type().trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("unknown pool type: " + body.type());
+        }
+        if (type != GatewayAccountType.UNALLOCATED && type != GatewayAccountType.FLOAT_POOL) {
+            throw new IllegalArgumentException(
+                    "PUT /pools only allows UNALLOCATED or FLOAT_POOL; RECON_RESERVE is funded from UNALLOCATED");
+        }
         String period = periodOrCurrent(body.period());
         metering.putPool(period, type, body.available());
         return ApiResponse.ok(toBalance(metering.findAccount(period, type, "").orElseThrow()));

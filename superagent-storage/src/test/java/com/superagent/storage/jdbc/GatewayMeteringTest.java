@@ -206,11 +206,16 @@ class GatewayMeteringTest {
                 .hasValueSatisfying(a -> assertThat(a.available()).isEqualTo(500_000));
         assertThat(ledger.findAccount(period, GatewayAccountType.UNALLOCATED, ""))
                 .hasValueSatisfying(a -> assertThat(a.available()).isZero());
-        assertThat(ledger.listLedger(period, 10)).anySatisfy(e -> {
-            assertThat(e.reason()).isEqualTo("RECON_FUND_IN");
-            assertThat(e.accountType()).isEqualTo(GatewayAccountType.RECON_RESERVE);
-            assertThat(e.deltaAvailable()).isEqualTo(500_000);
-        });
+        // Paired ledger: UNALLOCATED −move and RECON +move conserve company tokens.
+        long fundOut = ledger.listLedger(period, 20).stream()
+                .filter(e -> "RECON_FUND_OUT".equals(e.reason()))
+                .mapToLong(e -> e.deltaAvailable()).sum();
+        long fundIn = ledger.listLedger(period, 20).stream()
+                .filter(e -> "RECON_FUND_IN".equals(e.reason()))
+                .mapToLong(e -> e.deltaAvailable()).sum();
+        assertThat(fundOut).isEqualTo(-500_000);
+        assertThat(fundIn).isEqualTo(500_000);
+        assertThat(fundOut + fundIn).isZero();
 
         // Overage drains RECON; a second fund without UNALLOCATED must not mint back to target.
         ledger.putEmployee(period, "alice", 100);
