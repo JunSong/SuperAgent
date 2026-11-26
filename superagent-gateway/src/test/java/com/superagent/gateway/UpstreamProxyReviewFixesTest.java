@@ -47,6 +47,7 @@ class UpstreamProxyReviewFixesTest {
     private final AtomicInteger stubHits = new AtomicInteger();
     private final AtomicReference<String> seenCookie = new AtomicReference<>();
     private final AtomicReference<String> seenBody = new AtomicReference<>();
+    private final AtomicReference<java.util.List<String>> seenAnthropicVersions = new AtomicReference<>();
     private String stubBase;
 
     @BeforeEach
@@ -55,6 +56,7 @@ class UpstreamProxyReviewFixesTest {
         stub.createContext("/anthropic/v1/messages", exchange -> {
             stubHits.incrementAndGet();
             seenCookie.set(exchange.getRequestHeaders().getFirst("Cookie"));
+            seenAnthropicVersions.set(exchange.getRequestHeaders().get("anthropic-version"));
             seenBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
             byte[] body = "ok".getBytes(StandardCharsets.UTF_8);
             exchange.sendResponseHeaders(200, body.length);
@@ -115,6 +117,46 @@ class UpstreamProxyReviewFixesTest {
         assertThat(seenCookie.get()).isNull();
         assertThat(seenBody.get()).contains("\"max_tokens\":32768");
         assertThat(seenBody.get()).doesNotContain("256000");
+    }
+
+    @Test
+    void anthropicVersionIsSetOnceEvenWhenCliSendsIt() throws Exception {
+        Clock clock = Clock.fixed(Instant.parse("2026-11-15T12:00:00Z"), ZoneOffset.UTC);
+        CredentialService credentials = mock(CredentialService.class);
+        when(credentials.current(eq("deepseek")))
+                .thenReturn(new CredentialService.Choice(new RunCredential("k1", stubBase, "sk", false)));
+        ModelRunGrants grants = new ModelRunGrants(Set.of("deepseek"), "http://cp", clock);
+        UpstreamProxy proxy = new UpstreamProxy(credentials, HttpClient.newHttpClient(), clock);
+
+        ModelRunLease lease = TenantContext.call("co1",
+                () -> grants.issue("t", "r", "alice", "deepseek", "deepseek-chat", Duration.ofMinutes(5)));
+        byte[] body = "{\"model\":\"deepseek-chat\",\"max_tokens\":8}".getBytes(StandardCharsets.UTF_8);
+        int status = proxy.forward(grants.require("Bearer " + lease.token()), "anthropic", "/v1/messages",
+                "POST", Map.of("anthropic-version", "2023-06-01", "Content-Type", "application/json"),
+                body, new ByteArrayOutputStream(), (c, ct) -> {
+                });
+        assertThat(status).isEqualTo(200);
+        assertThat(seenAnthropicVersions.get()).containsExactly("2023-06-01");
+    }
+
+    @Test
+    void nonJsonBodyMustNotGoOutbound() throws Exception {
+        Clock clock = Clock.fixed(Instant.parse("2026-11-15T12:00:00Z"), ZoneOffset.UTC);
+        CredentialService credentials = mock(CredentialService.class);
+        when(credentials.current(eq("deepseek")))
+                .thenReturn(new CredentialService.Choice(new RunCredential("k1", stubBase, "sk", false)));
+        ModelRunGrants grants = new ModelRunGrants(Set.of("deepseek"), "http://cp", clock);
+        UpstreamProxy proxy = new UpstreamProxy(credentials, HttpClient.newHttpClient(), clock);
+
+        ModelRunLease lease = TenantContext.call("co1",
+                () -> grants.issue("t", "r", "alice", "deepseek", "deepseek-chat", Duration.ofMinutes(5)));
+        assertThatThrownBy(() -> proxy.forward(grants.require("Bearer " + lease.token()), "anthropic",
+                "/v1/messages", "POST", Map.of(), "not-json".getBytes(StandardCharsets.UTF_8),
+                new ByteArrayOutputStream(), (c, ct) -> {
+                }))
+                .isInstanceOf(ForbiddenException.class)
+                .hasMessageContaining("JSON");
+        assertThat(stubHits.get()).isZero();
     }
 
     @Test

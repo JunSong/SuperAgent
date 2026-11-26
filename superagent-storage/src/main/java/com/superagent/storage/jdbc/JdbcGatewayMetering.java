@@ -779,6 +779,10 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
         }
     }
 
+    /**
+     * True when this turn already consumed base via a live attempt (R04). CANCELLED / RESERVED-only
+     * ghosts must not unlock float for a "continuation" after freeze was released.
+     */
     private boolean hasAttemptForTurn(String company, String period, String payerUserId, String turnId) {
         if (turnId == null || turnId.isBlank()) {
             return false;
@@ -786,8 +790,12 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
         Integer n = jdbc.queryForObject("""
                 SELECT COUNT(*) FROM gateway_attempt
                 WHERE company_id = ? AND period = ? AND payer_user_id = ? AND turn_id = ?
+                  AND status IN (?, ?, ?)
                 """,
-                Integer.class, company, period, payerUserId, turnId);
+                Integer.class, company, period, payerUserId, turnId,
+                GatewayAttemptStatus.SETTLED.name(),
+                GatewayAttemptStatus.SENDING.name(),
+                GatewayAttemptStatus.PENDING_RECONCILIATION.name());
         return n != null && n > 0;
     }
 

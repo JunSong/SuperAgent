@@ -41,9 +41,11 @@ public class UpstreamProxy {
             "te", "trailers", "transfer-encoding", "upgrade", "host", "content-length");
     /**
      * Explicit allow-list only (C3): never forward Cookie / session / internal auth to the vendor.
+     * {@code anthropic-version} is set by {@link #applyCompanyAuth} only — forwarding the CLI's
+     * copy would duplicate the header (JDK {@code header()} appends).
      */
     private static final Set<String> FORWARD_HEADERS = Set.of(
-            "content-type", "accept", "anthropic-version", "anthropic-beta", "openai-beta");
+            "content-type", "accept", "anthropic-beta", "openai-beta");
 
     private final CredentialService credentials;
     private final HttpClient http;

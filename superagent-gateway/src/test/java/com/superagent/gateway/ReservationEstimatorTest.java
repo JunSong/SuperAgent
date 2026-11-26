@@ -1,10 +1,12 @@
 package com.superagent.gateway;
 
+import com.superagent.core.error.ForbiddenException;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ReservationEstimatorTest {
 
@@ -16,9 +18,10 @@ class ReservationEstimatorTest {
     }
 
     @Test
-    void respectsLargerOutputCap() {
+    void respectsLargerOutputCapOnResponses() {
         byte[] body = "{\"max_output_tokens\":1000}".getBytes(StandardCharsets.UTF_8);
-        assertThat(ReservationEstimator.estimate(body)).isEqualTo((body.length + 3) / 4 + 1000);
+        assertThat(ReservationEstimator.prepare(body, ModelRunGrants.PROTOCOL_OPENAI, "/v1/responses").reservedTokens())
+                .isEqualTo((body.length + 3) / 4 + 1000);
     }
 
     @Test
@@ -70,7 +73,56 @@ class ReservationEstimatorTest {
         assertThat(clamped.outputCap()).isEqualTo(ReservationEstimator.OUTPUT_RESERVE_CAP);
         String c = ReservationEstimator.asUtf8(clamped.body());
         assertThat(c).contains("\"max_completion_tokens\":32768");
-        assertThat(c).doesNotContain("max_tokens");
+        assertThat(c).doesNotContain("\"max_tokens\"");
         assertThat(c).doesNotContain("max_output_tokens");
+    }
+
+    @Test
+    void chatIgnoresForeignMaxOutputTokensAndInjectsMaxTokens() {
+        // H1: Chat Completions must not under-reserve via a Responses-only field.
+        byte[] body = "{\"model\":\"x\",\"max_output_tokens\":1,\"messages\":[]}".getBytes(StandardCharsets.UTF_8);
+        ReservationEstimator.Prepared prepared =
+                ReservationEstimator.prepare(body, ModelRunGrants.PROTOCOL_OPENAI, "/v1/chat/completions");
+        assertThat(prepared.outputCap()).isEqualTo(256);
+        String out = ReservationEstimator.asUtf8(prepared.body());
+        assertThat(out).contains("\"max_tokens\":256");
+        assertThat(out).contains("\"max_output_tokens\":1"); // foreign field left alone, ignored for R
+    }
+
+    @Test
+    void responsesIgnoresForeignMaxTokensAndUsesMaxOutputTokens() {
+        // H1 reverse: leftover max_tokens must not clamp Responses below the real cap.
+        byte[] body = "{\"model\":\"x\",\"max_tokens\":1,\"max_output_tokens\":8000}".getBytes(StandardCharsets.UTF_8);
+        ReservationEstimator.Prepared prepared =
+                ReservationEstimator.prepare(body, ModelRunGrants.PROTOCOL_OPENAI, "/v1/responses");
+        assertThat(prepared.outputCap()).isEqualTo(8000);
+        String out = ReservationEstimator.asUtf8(prepared.body());
+        assertThat(out).contains("\"max_output_tokens\":8000");
+        assertThat(out).contains("\"max_tokens\":1"); // foreign field ignored for declared/clamp
+    }
+
+    @Test
+    void rejectsNonJsonBody() {
+        assertThatThrownBy(() -> ReservationEstimator.prepare(
+                "not-json".getBytes(StandardCharsets.UTF_8),
+                ModelRunGrants.PROTOCOL_OPENAI, "/v1/chat/completions"))
+                .isInstanceOf(ForbiddenException.class)
+                .hasMessageContaining("JSON");
+    }
+
+    @Test
+    void rejectsJsonArrayBody() {
+        assertThatThrownBy(() -> ReservationEstimator.prepare(
+                "[]".getBytes(StandardCharsets.UTF_8),
+                ModelRunGrants.PROTOCOL_OPENAI, "/v1/chat/completions"))
+                .isInstanceOf(ForbiddenException.class)
+                .hasMessageContaining("JSON");
+    }
+
+    @Test
+    void rejectsEmptyBody() {
+        assertThatThrownBy(() -> ReservationEstimator.prepare(
+                new byte[0], ModelRunGrants.PROTOCOL_ANTHROPIC, "/v1/messages"))
+                .isInstanceOf(ForbiddenException.class);
     }
 }

@@ -1,8 +1,10 @@
 package com.superagent.storage.jdbc;
 
+import com.superagent.core.gateway.GatewayAccountType;
 import com.superagent.core.gateway.GatewayAttempt;
 import com.superagent.core.gateway.GatewayAttemptStatus;
 import com.superagent.core.gateway.GatewayMetering;
+import com.superagent.core.gateway.GatewayQuotaExhaustedException;
 import com.superagent.core.gateway.GatewayQuotaInsufficientException;
 import com.superagent.core.tenant.TenantContext;
 import org.junit.jupiter.api.Test;
@@ -192,6 +194,49 @@ class GatewayMeteringTest {
         assertThat(stillPending.status()).isEqualTo(GatewayAttemptStatus.PENDING_RECONCILIATION);
         assertThat(ledger.findEmployee(period, "alice")).hasValueSatisfying(acc ->
                 assertThat(acc.reserved()).isEqualTo(60));
+    }
+
+    @Test
+    void cancelledAttemptMustNotUnlockFloatForSameTurnId() {
+        JdbcGatewayMetering ledger = newLedger();
+        String period = "2026-11";
+        ledger.putEmployee(period, "alice", 100, 0, 100, 50);
+        ledger.putPool(period, GatewayAccountType.FLOAT_POOL, 50);
+
+        GatewayAttempt cancelled = ledger.reserve(new GatewayMetering.ReserveRequest(
+                "req-old", "turn-stale", "run-1", "alice", "deepseek", "m", period, 60));
+        ledger.cancel(cancelled.id());
+
+        GatewayAttempt deplete = ledger.reserve(new GatewayMetering.ReserveRequest(
+                "req-dep", "turn-dep", "run-2", "alice", "deepseek", "m", period, 100));
+        assertThat(ledger.beginSend(deplete.id())).isTrue();
+        ledger.settle(deplete.id(), 100);
+
+        assertThatThrownBy(() -> ledger.reserve(new GatewayMetering.ReserveRequest(
+                "req-reuse", "turn-stale", "run-3", "alice", "deepseek", "m", period, 10)))
+                .isInstanceOf(GatewayQuotaExhaustedException.class)
+                .hasMessageContaining("QUOTA_EXHAUSTED");
+    }
+
+    @Test
+    void settledAttemptAllowsSameTurnFloatContinuation() {
+        JdbcGatewayMetering ledger = newLedger();
+        String period = "2026-11";
+        ledger.putEmployee(period, "alice", 100, 0, 100, 50);
+        ledger.putPool(period, GatewayAccountType.FLOAT_POOL, 50);
+
+        GatewayAttempt first = ledger.reserve(new GatewayMetering.ReserveRequest(
+                "req-s1", "turn-live", "run-s", "alice", "deepseek", "m", period, 100));
+        assertThat(ledger.beginSend(first.id())).isTrue();
+        ledger.settle(first.id(), 100);
+
+        GatewayAttempt cont = ledger.reserve(new GatewayMetering.ReserveRequest(
+                "req-s2", "turn-live", "run-s", "alice", "deepseek", "m", period, 10));
+        assertThat(cont.status()).isEqualTo(GatewayAttemptStatus.RESERVED);
+        assertThat(ledger.findEmployee(period, "alice")).hasValueSatisfying(a -> {
+            assertThat(a.floatTurnId()).isEqualTo("turn-live");
+            assertThat(a.reserved()).isEqualTo(10);
+        });
     }
 
     private static JdbcGatewayMetering newLedger() {
