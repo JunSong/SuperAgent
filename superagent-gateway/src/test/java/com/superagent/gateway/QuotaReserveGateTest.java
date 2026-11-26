@@ -81,6 +81,47 @@ class QuotaReserveGateTest {
     }
 
     @Test
+    void waitsWhenPartialAvailablePlusReservedCouldCoverR() throws Exception {
+        Clock clock = Clock.systemUTC();
+        HoldMetering ledger = new HoldMetering(200);
+        ledger.putEmployee("2026-11", "alice", 100);
+        QuotaReserveGate gate = new QuotaReserveGate(clock);
+        gate.setTiming(Duration.ofMillis(800), Duration.ofMillis(20));
+
+        GatewayAttempt hold = TenantContext.call("co1", () -> gate.reserve(ledger, req("hold", 50)));
+        // available=50, reserved=50; R=60 → mayBecomeAvailable (not only available==0)
+        AtomicReference<GatewayAttempt> got = new AtomicReference<>();
+        AtomicReference<Throwable> err = new AtomicReference<>();
+        Thread waiter = new Thread(() -> TenantContext.run("co1", () -> {
+            try {
+                got.set(gate.reserve(ledger, req("w", 60)));
+            } catch (Throwable t) {
+                err.set(t);
+            }
+        }));
+        waiter.start();
+        Thread.sleep(40);
+        ledger.cancel(hold.id());
+        waiter.join(2000);
+        assertThat(err.get()).isNull();
+        assertThat(got.get()).isNotNull();
+        assertThat(got.get().reservedTokens()).isEqualTo(60);
+    }
+
+    @Test
+    void doesNotWaitWhenEvenFullReleaseCannotCoverR() {
+        Clock clock = Clock.systemUTC();
+        HoldMetering ledger = new HoldMetering(200);
+        ledger.putEmployee("2026-11", "alice", 50);
+        QuotaReserveGate gate = new QuotaReserveGate(clock);
+        GatewayAttempt hold = TenantContext.call("co1", () -> gate.reserve(ledger, req("hold", 10)));
+        // available=40, reserved=10; R=60 → 50 < 60, rethrow INSUFFICIENT (no wait)
+        TenantContext.run("co1", () -> assertThatThrownBy(() -> gate.reserve(ledger, req("w", 60)))
+                .isInstanceOf(GatewayQuotaInsufficientException.class));
+        ledger.cancel(hold.id());
+    }
+
+    @Test
     void afterHoldSettlesAtCapWaitersSeeExhausted() throws Exception {
         Clock clock = Clock.systemUTC();
         HoldMetering ledger = new HoldMetering(5);

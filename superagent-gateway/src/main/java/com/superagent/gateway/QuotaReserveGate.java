@@ -17,7 +17,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Short wait when available is zero but in-flight reserves may free enough room (#34 QUOTA_BUSY).
+ * Short wait when available &lt; R but in-flight reserves may free enough room (#34 QUOTA_BUSY).
  * At most two waiters per employee; wait up to 2s then fail busy.
  */
 @Component
@@ -84,7 +84,8 @@ public class QuotaReserveGate {
     }
 
     /**
-     * Wait only when available is empty, something is held, and freeing the hold could cover R.
+     * Wait when available &lt; R but in-flight reserves could free enough room
+     * ({@code available + reserved >= R}). Not only when {@code available == 0}.
      */
     private static boolean mayBecomeAvailable(GatewayMetering metering, GatewayMetering.ReserveRequest request) {
         Optional<GatewayAccount> account = metering.findEmployee(request.period(), request.payerUserId());
@@ -92,7 +93,10 @@ public class QuotaReserveGate {
             return false;
         }
         GatewayAccount a = account.get();
-        return a.available() == 0 && a.reserved() >= request.reservedTokens();
+        long need = request.reservedTokens();
+        return a.available() < need
+                && a.reserved() > 0
+                && a.available() + a.reserved() >= need;
     }
 
     private static String waiterKey(GatewayMetering.ReserveRequest request) {

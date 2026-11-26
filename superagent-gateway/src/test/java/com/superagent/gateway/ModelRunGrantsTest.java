@@ -56,6 +56,25 @@ class ModelRunGrantsTest {
     }
 
     @Test
+    void sweepRemovesExpiredAndRevokedTokens() {
+        MutableClock clock = new MutableClock(Instant.parse("2026-11-24T00:00:00Z"));
+        ModelRunGrants grants = new ModelRunGrants(Set.of("deepseek"), "http://gw", clock);
+        ModelRunLease live = TenantContext.call("co1",
+                () -> grants.issue("t-live", "r-live", "alice", "deepseek", "m", Duration.ofMinutes(10)));
+        ModelRunLease expired = TenantContext.call("co1",
+                () -> grants.issue("t-exp", "r-exp", "alice", "deepseek", "m", Duration.ofMinutes(1)));
+        ModelRunLease revoked = TenantContext.call("co1",
+                () -> grants.issue("t-rev", "r-rev", "bob", "deepseek", "m", Duration.ofMinutes(10)));
+        grants.revoke(revoked.token());
+        clock.set(Instant.parse("2026-11-24T00:02:00Z"));
+        assertThat(grants.sweepExpired()).isEqualTo(2);
+        assertThat(grants.find(expired.token())).isEmpty();
+        assertThat(grants.find(revoked.token())).isEmpty();
+        assertThat(grants.find(live.token())).isPresent();
+        assertThat(grants.openCount()).isEqualTo(1);
+    }
+
+    @Test
     void managedOnlyListedClis() {
         ModelRunGrants grants = new ModelRunGrants(Set.of("deepseek"), "http://gw", Clock.systemUTC());
         assertThat(grants.managed("deepseek")).isTrue();

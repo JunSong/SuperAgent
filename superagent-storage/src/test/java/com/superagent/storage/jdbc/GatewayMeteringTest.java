@@ -344,6 +344,24 @@ class GatewayMeteringTest {
         });
     }
 
+    @Test
+    void putEmployeePreservesInFlightReserved() {
+        JdbcGatewayMetering ledger = newLedger();
+        String period = "2026-11";
+        ledger.putEmployee(period, "alice", 100);
+        GatewayAttempt hold = ledger.reserve(new GatewayMetering.ReserveRequest(
+                "req-hold", "turn-hold", "run-hold", "alice", "deepseek", "m", period, 40));
+        assertThat(hold.reservedTokens()).isEqualTo(40);
+        // Seed/admin upsert must not wipe the freeze (old REPLACE INTO zeroed reserved).
+        ledger.putEmployee(period, "alice", 80, 0, 80, 0);
+        assertThat(ledger.findEmployee(period, "alice")).hasValueSatisfying(a -> {
+            assertThat(a.available()).isEqualTo(80);
+            assertThat(a.reserved()).isEqualTo(40);
+            assertThat(a.baseQuota()).isEqualTo(80);
+        });
+        ledger.cancel(hold.id());
+    }
+
     private static JdbcGatewayMetering newLedger() {
         return new JdbcGatewayMetering(new JdbcTemplate(new DriverManagerDataSource(
                 "jdbc:h2:mem:gw-meter-" + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "")));

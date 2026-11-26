@@ -13,6 +13,11 @@
 - **Input half of R**: `GatewayInputBoundMode.HEURISTIC` (`body bytes/4`). Labelled in policy API as `inputBoundMode=HEURISTIC`, `hardInputBoundAvailable=false`.
 - **Policy**: `hardQuotaClis` defaults to `[]`; non-empty updates are **rejected** until `GatewayPolicy.HARD_INPUT_BOUND_AVAILABLE` is true.
 - **Admin UI**: copy states managed ≠ hard input bound; soft path is explicit.
+- **Bounded upstream timeouts**: connect / first-byte / idle / request (`superagent.gateway.*-timeout-seconds`).
+- **Run-token sweep**: expired / revoked in-memory grants removed on an interval.
+- **QUOTA_BUSY wait**: waits when `available < R` but `available + reserved >= R` (not only `available == 0`).
+- **Account upsert**: `putEmployee` / `putPool` no longer `REPLACE INTO` (preserves in-flight `reserved_tokens`).
+- **RECON mid-month top-up**: scheduled job moves UNALLOCATED → RECON_RESERVE up to company target (never mints).
 
 ## Deferred (not done in this change)
 
@@ -22,7 +27,7 @@ These remain open and must not be described as closed:
 2. **False-reject baseline** (mis-reject rate denominator) required before turning on hard R for a combination.
 3. **Per-CLI `PROVEN` path** in `ReservationEstimator` — enum exists; implementation always returns `HEURISTIC`.
 4. **Enabling `hardQuotaClis` in production** — blocked in `GatewayPolicyService` until (1)+(2) land.
-5. **Earlier backlog still open**: first-event/idle timeouts, run-token sweep, `bytes/4` UTF-8 under-estimate fix (only via proven bound), QUOTA_BUSY wait condition, log minimization, employee `REPLACE INTO`, RECON mid-month auto top-up job, full MySQL concurrency soak, real vendor/CLI E2E.
+5. **Still open later**: full MySQL concurrency soak, real vendor/CLI E2E, G3/G4 acceptance archive, pending-alert / company-takeover SLA automation beyond RECON top-up.
 
 ## Product wording
 

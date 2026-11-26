@@ -199,10 +199,17 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
             throw new IllegalArgumentException("balances must be >= 0");
         }
         String company = TenantSchema.company();
+        // Upsert without wiping reserved_tokens / float_turn_id (REPLACE INTO would drop in-flight freezes).
         jdbc.update("""
-                REPLACE INTO gateway_account (company_id, period, account_type, owner_id, quota_mode,
+                INSERT INTO gateway_account (company_id, period, account_type, owner_id, quota_mode,
                   available_tokens, reserved_tokens, settled_tokens, base_quota, float_allowance, float_turn_id)
                 VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, NULL)
+                ON DUPLICATE KEY UPDATE
+                  available_tokens = VALUES(available_tokens),
+                  settled_tokens = VALUES(settled_tokens),
+                  base_quota = VALUES(base_quota),
+                  float_allowance = VALUES(float_allowance),
+                  quota_mode = VALUES(quota_mode)
                 """,
                 company, period, GatewayAccountType.EMPLOYEE.name(), userId,
                 GatewayQuotaMode.LIMITED.name(), available, settled, baseQuota, floatAllowance);
@@ -217,9 +224,13 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
             throw new IllegalArgumentException("available must be >= 0");
         }
         jdbc.update("""
-                REPLACE INTO gateway_account (company_id, period, account_type, owner_id, quota_mode,
+                INSERT INTO gateway_account (company_id, period, account_type, owner_id, quota_mode,
                   available_tokens, reserved_tokens, settled_tokens, base_quota, float_allowance, float_turn_id)
                 VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, 0, NULL)
+                ON DUPLICATE KEY UPDATE
+                  available_tokens = VALUES(available_tokens),
+                  base_quota = VALUES(base_quota),
+                  quota_mode = VALUES(quota_mode)
                 """,
                 TenantSchema.company(), period, type.name(), POOL_OWNER, GatewayQuotaMode.LIMITED.name(),
                 available, available);

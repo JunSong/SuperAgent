@@ -9,9 +9,11 @@ import com.superagent.core.gateway.GatewayQuotaMode;
 import com.superagent.core.provider.ProviderCatalog;
 import com.superagent.core.tenant.TenantContext;
 import com.superagent.platform.provider.CredentialService;
+import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -26,11 +28,20 @@ import java.time.Duration;
 import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Forwards a model HTTP call to the company upstream with the real Key swapped in.
  * Streams the response body; never buffers the whole reply. When {@link GatewayMetering} is present
  * and the payer has a LIMITED account, reserves tokens before the upstream call (#34 PR-03).
+ * Bounded connect / first-byte / idle / request timeouts (#34 §4).
  */
 @Component
 public class UpstreamProxy {
@@ -51,12 +62,32 @@ public class UpstreamProxy {
     private final HttpClient http;
     private final Clock clock;
     private final QuotaReserveGate reserveGate;
+    private final GatewayProxyTimeouts timeouts;
+    private final ScheduledExecutorService idleWatch = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "gateway-proxy-idle");
+        t.setDaemon(true);
+        return t;
+    });
     private GatewayMetering metering; // null in tests / legacy: no ledger
     private ModelRunGrants grants; // null in some unit tests: skip live-token recheck
 
     @Autowired
-    public UpstreamProxy(CredentialService credentials, QuotaReserveGate reserveGate, Clock clock) {
-        this(credentials, HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(30)).build(), clock, reserveGate);
+    public UpstreamProxy(
+            CredentialService credentials,
+            QuotaReserveGate reserveGate,
+            Clock clock,
+            @Value("${superagent.gateway.connect-timeout-seconds:5}") long connectTimeoutSeconds,
+            @Value("${superagent.gateway.first-byte-timeout-seconds:30}") long firstByteTimeoutSeconds,
+            @Value("${superagent.gateway.idle-timeout-seconds:120}") long idleTimeoutSeconds,
+            @Value("${superagent.gateway.request-timeout-seconds:600}") long requestTimeoutSeconds) {
+        this(credentials,
+                HttpClient.newBuilder()
+                        .connectTimeout(Duration.ofSeconds(Math.max(1, connectTimeoutSeconds)))
+                        .build(),
+                clock,
+                reserveGate,
+                GatewayProxyTimeouts.ofSeconds(
+                        connectTimeoutSeconds, firstByteTimeoutSeconds, idleTimeoutSeconds, requestTimeoutSeconds));
     }
 
     /** Tests inject a client pointed at a local stub. */
@@ -69,10 +100,21 @@ public class UpstreamProxy {
     }
 
     public UpstreamProxy(CredentialService credentials, HttpClient http, Clock clock, QuotaReserveGate reserveGate) {
+        this(credentials, http, clock, reserveGate, GatewayProxyTimeouts.TESTS);
+    }
+
+    UpstreamProxy(CredentialService credentials, HttpClient http, Clock clock, QuotaReserveGate reserveGate,
+                  GatewayProxyTimeouts timeouts) {
         this.credentials = credentials;
         this.http = http;
         this.clock = clock;
         this.reserveGate = reserveGate != null ? reserveGate : new QuotaReserveGate(clock);
+        this.timeouts = timeouts != null ? timeouts : GatewayProxyTimeouts.TESTS;
+    }
+
+    @PreDestroy
+    void stopIdleWatch() {
+        idleWatch.shutdownNow();
     }
 
     @Autowired(required = false)
@@ -125,12 +167,12 @@ public class UpstreamProxy {
                     String upstreamBase = resolveUpstreamBase(grant.cli(), cred.baseUrl());
                     String target = joinUrl(upstreamBase, normalizedSuffix);
                     HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(target))
-                            .timeout(Duration.ofMinutes(30));
+                            .timeout(timeouts.request());
                     applyMethod(req, method, prepared.body());
                     copyForwardHeaders(requestHeaders, req);
                     applyCompanyAuth(req, protocol, cred);
-                    log.debug("gateway forward company={} cli={} run={} → {}", grant.companyId(), grant.cli(),
-                            grant.runId(), redact(target));
+                    int bodyBytes = prepared.body() == null ? 0 : prepared.body().length;
+                    log.debug("gateway forward model={} bytes={} → {}", grant.model(), bodyBytes, redact(target));
 
                     if (attempt != null) {
                         requireGrantStillUsable(grant, attempt);
@@ -142,24 +184,14 @@ public class UpstreamProxy {
                     }
 
                     requireGrantStillUsable(grant, attempt);
-                    HttpResponse<InputStream> resp = http.send(req.build(), HttpResponse.BodyHandlers.ofInputStream());
+                    HttpResponse<InputStream> resp = sendWithFirstByteTimeout(req.build());
                     if (onResponseHeaders != null) {
                         onResponseHeaders.accept(resp.statusCode(),
                                 resp.headers().firstValue("content-type").orElse(null));
                     }
                     StreamingUsageProbe usageProbe = new StreamingUsageProbe();
                     try (InputStream in = resp.body()) {
-                        byte[] buf = new byte[8192];
-                        int n;
-                        while ((n = in.read(buf)) >= 0) {
-                            if (n == 0) {
-                                continue;
-                            }
-                            out.write(buf, 0, n);
-                            out.flush(); // SSE: push each chunk; do not sit on the servlet buffer
-                            usageProbe.accept(buf, 0, n);
-                        }
-                        out.flush();
+                        pumpBody(in, out, usageProbe);
                     }
                     usageProbe.finish();
                     settleOrPending(attempt, usageProbe);
@@ -205,6 +237,70 @@ public class UpstreamProxy {
                 throw ie;
             }
             throw e;
+        }
+    }
+
+    private HttpResponse<InputStream> sendWithFirstByteTimeout(HttpRequest request)
+            throws IOException, InterruptedException {
+        var future = http.sendAsync(request, HttpResponse.BodyHandlers.ofInputStream());
+        try {
+            return future.get(timeouts.firstByte().toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            future.cancel(true);
+            throw new IOException("upstream first-byte timeout after " + timeouts.firstByte(), e);
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause() == null ? e : e.getCause();
+            if (cause instanceof IOException io) {
+                throw io;
+            }
+            if (cause instanceof InterruptedException ie) {
+                throw ie;
+            }
+            throw new IOException("upstream send failed: " + cause.getMessage(), cause);
+        }
+    }
+
+    /**
+     * Copy upstream chunks to the CLI; close the upstream stream if no bytes arrive within idle timeout.
+     */
+    private void pumpBody(InputStream in, OutputStream out, StreamingUsageProbe usageProbe) throws IOException {
+        AtomicLong lastActivityNanos = new AtomicLong(System.nanoTime());
+        AtomicBoolean finished = new AtomicBoolean(false);
+        long idleNanos = timeouts.idle().toNanos();
+        long checkMs = Math.min(1_000L, Math.max(50L, timeouts.idle().toMillis() / 4));
+        ScheduledFuture<?> watch = idleWatch.scheduleWithFixedDelay(() -> {
+            if (finished.get()) {
+                return;
+            }
+            if (System.nanoTime() - lastActivityNanos.get() > idleNanos) {
+                try {
+                    in.close();
+                } catch (IOException ignored) {
+                    // reader will surface the close
+                }
+            }
+        }, checkMs, checkMs, TimeUnit.MILLISECONDS);
+        try {
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) >= 0) {
+                if (n == 0) {
+                    continue;
+                }
+                lastActivityNanos.set(System.nanoTime());
+                out.write(buf, 0, n);
+                out.flush(); // SSE: push each chunk; do not sit on the servlet buffer
+                usageProbe.accept(buf, 0, n);
+            }
+            out.flush();
+        } catch (IOException e) {
+            if (System.nanoTime() - lastActivityNanos.get() > idleNanos) {
+                throw new IOException("upstream idle timeout after " + timeouts.idle(), e);
+            }
+            throw e;
+        } finally {
+            finished.set(true);
+            watch.cancel(false);
         }
     }
 

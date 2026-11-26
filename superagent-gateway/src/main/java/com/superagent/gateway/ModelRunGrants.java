@@ -5,8 +5,12 @@ import com.superagent.core.gateway.GatewayPeriods;
 import com.superagent.core.gateway.ModelRunLease;
 import com.superagent.core.gateway.ModelRunLeaseService;
 import com.superagent.core.tenant.TenantContext;
+import jakarta.annotation.PreDestroy;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.boot.web.context.WebServerInitializedEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
@@ -20,15 +24,21 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
 
 /**
  * In-memory model-run tokens (same lifecycle idea as MCP grants): issued per CLI process, revoked when the
  * run ends, never shared across companies. Single control-plane JVM only.
  * Managed-CLI membership comes from company {@link GatewayPolicyService} (admin UI), not process env alone.
+ * Expired / revoked entries are swept on a timer so the map cannot grow without bound.
  */
 @Component
 public class ModelRunGrants implements ModelRunLeaseService {
+
+    private static final Logger log = LoggerFactory.getLogger(ModelRunGrants.class);
 
     public static final String PROTOCOL_ANTHROPIC = "anthropic";
     public static final String PROTOCOL_OPENAI = "openai";
@@ -38,6 +48,13 @@ public class ModelRunGrants implements ModelRunLeaseService {
     private final Clock clock;
     private final Predicate<String> managedCheck;
     private final boolean configuredSelfUrl;
+    private final boolean sweepEnabled;
+    private final long sweepIntervalSeconds;
+    private final ScheduledExecutorService sweeper = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "gateway-run-token-sweep");
+        t.setDaemon(true);
+        return t;
+    });
     private volatile String selfBase;
     private GatewayMetering metering; // null in early tests: managed CLIs are not assignable to payers
 
@@ -46,8 +63,11 @@ public class ModelRunGrants implements ModelRunLeaseService {
             GatewayPolicyService policy,
             @Value("${superagent.gateway.self-url:}") String selfUrl,
             @Value("${server.port:18080}") int port,
-            Clock clock) {
-        this(policy::managed, selfUrl, port, clock, selfUrl != null && !selfUrl.isBlank());
+            Clock clock,
+            @Value("${superagent.gateway.token-sweep.enabled:true}") boolean sweepEnabled,
+            @Value("${superagent.gateway.token-sweep.interval-seconds:60}") long sweepIntervalSeconds) {
+        this(policy::managed, selfUrl, port, clock, selfUrl != null && !selfUrl.isBlank(),
+                sweepEnabled, sweepIntervalSeconds);
     }
 
     @Autowired(required = false)
@@ -55,27 +75,72 @@ public class ModelRunGrants implements ModelRunLeaseService {
         this.metering = metering;
     }
 
-    /** Test / explicit wiring with a fixed managed set. */
+    /** Test / explicit wiring with a fixed managed set (no scheduled sweep). */
     public ModelRunGrants(Set<String> managedClis, String selfBase, Clock clock) {
         Set<String> fixed = Set.copyOf(managedClis);
         this.clock = clock;
         this.managedCheck = cli -> cli != null && fixed.contains(cli.toLowerCase(Locale.ROOT));
         this.configuredSelfUrl = true;
         this.selfBase = trimSlash(selfBase);
+        this.sweepEnabled = false;
+        this.sweepIntervalSeconds = 60;
     }
 
     private ModelRunGrants(Predicate<String> managedCheck, String selfUrl, int port, Clock clock,
-                           boolean configuredSelfUrl) {
+                           boolean configuredSelfUrl, boolean sweepEnabled, long sweepIntervalSeconds) {
         this.clock = clock;
         this.managedCheck = managedCheck;
         this.configuredSelfUrl = configuredSelfUrl;
         this.selfBase = configuredSelfUrl ? trimSlash(selfUrl.trim()) : "http://127.0.0.1:" + port;
+        this.sweepEnabled = sweepEnabled;
+        this.sweepIntervalSeconds = Math.max(5, sweepIntervalSeconds);
     }
 
     @EventListener
     public void onWebServer(WebServerInitializedEvent event) {
         if (!configuredSelfUrl && event.getWebServer().getPort() > 0) {
             selfBase = "http://127.0.0.1:" + event.getWebServer().getPort();
+        }
+    }
+
+    @EventListener(ApplicationReadyEvent.class)
+    void startSweep() {
+        if (!sweepEnabled) {
+            return;
+        }
+        sweeper.scheduleWithFixedDelay(this::sweepSafely, sweepIntervalSeconds, sweepIntervalSeconds, TimeUnit.SECONDS);
+        log.info("gateway run-token sweep started (interval={}s)", sweepIntervalSeconds);
+    }
+
+    @PreDestroy
+    void stopSweep() {
+        sweeper.shutdownNow();
+    }
+
+    /**
+     * Drop expired and revoked tokens from the in-memory map. Returns how many entries were removed.
+     */
+    int sweepExpired() {
+        Instant now = clock.instant();
+        int[] removed = {0};
+        byToken.entrySet().removeIf(e -> {
+            if (e.getValue().usable(now)) {
+                return false;
+            }
+            removed[0]++;
+            return true;
+        });
+        return removed[0];
+    }
+
+    private void sweepSafely() {
+        try {
+            int n = sweepExpired();
+            if (n > 0) {
+                log.debug("gateway run-token sweep removed={}", n);
+            }
+        } catch (RuntimeException e) {
+            log.warn("gateway run-token sweep failed: {}", e.getMessage());
         }
     }
 

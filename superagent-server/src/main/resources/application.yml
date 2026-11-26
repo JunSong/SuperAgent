@@ -55,6 +55,16 @@ superagent:
   gateway:
     managed-clis: ${SUPERAGENT_GATEWAY_MANAGED_CLIS:}
     # self-url: ${SUPERAGENT_GATEWAY_SELF_URL:}   # optional; defaults to http://127.0.0.1:<server.port>
+    connect-timeout-seconds: ${SUPERAGENT_GATEWAY_CONNECT_TIMEOUT:5}
+    first-byte-timeout-seconds: ${SUPERAGENT_GATEWAY_FIRST_BYTE_TIMEOUT:30}
+    idle-timeout-seconds: ${SUPERAGENT_GATEWAY_IDLE_TIMEOUT:120}
+    request-timeout-seconds: ${SUPERAGENT_GATEWAY_REQUEST_TIMEOUT:600}
+    token-sweep:
+      enabled: ${SUPERAGENT_GATEWAY_TOKEN_SWEEP_ENABLED:true}
+      interval-seconds: ${SUPERAGENT_GATEWAY_TOKEN_SWEEP_INTERVAL:60}
+    recon-topup:
+      enabled: ${SUPERAGENT_GATEWAY_RECON_TOPUP_ENABLED:true}
+      interval-minutes: ${SUPERAGENT_GATEWAY_RECON_TOPUP_INTERVAL:60}
   storage:
     # Business data is always in MySQL. Analytics data (token usage, the agent run log, turn timings) is too, unless
     # this is clickhouse; then those tables alone go to superagent.storage.clickhouse.* (url, username, password).
