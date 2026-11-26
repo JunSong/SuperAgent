@@ -24,6 +24,7 @@ public class JdbcUsageStore implements UsageStore {
               agent_id       VARCHAR(64),
               task_id        VARCHAR(64),
               session_id     VARCHAR(64),
+              run_id         VARCHAR(64),
               cli            VARCHAR(32),
               model          VARCHAR(128),
               input_tokens   BIGINT NOT NULL,
@@ -38,34 +39,37 @@ public class JdbcUsageStore implements UsageStore {
               PRIMARY KEY (company_id, id),
               KEY idx_usage_task (company_id, task_id),
               KEY idx_usage_user_at (company_id, user_name, at),
-              KEY idx_usage_at (company_id, at)
+              KEY idx_usage_at (company_id, at),
+              KEY idx_usage_run (company_id, run_id)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """;
 
     static final String CLICKHOUSE_DDL = """
             CREATE TABLE IF NOT EXISTS token_usage (
               company_id String, id String, at DateTime64(3, 'UTC'), user_name Nullable(String), source String, agent_id Nullable(String),
-              task_id Nullable(String), session_id Nullable(String), cli Nullable(String), model Nullable(String),
+              task_id Nullable(String), session_id Nullable(String), run_id Nullable(String), cli Nullable(String), model Nullable(String),
               input_tokens Int64, cache_read Int64, cache_write Int64, cache_write_1h Int64, output_tokens Int64,
               reasoning Int64, context_tokens Nullable(Int64), cost_usd Nullable(Float64), cli_cost_usd Nullable(Float64)
             ) ENGINE = MergeTree ORDER BY (company_id, at, id)
             """;
 
-    private static final String COLUMNS = "id, at, user_name, source, agent_id, task_id, session_id, cli, model, input_tokens, "
+    private static final String COLUMNS = "id, at, user_name, source, agent_id, task_id, session_id, run_id, cli, model, input_tokens, "
             + "cache_read, cache_write, cache_write_1h, output_tokens, reasoning, context_tokens, cost_usd, cli_cost_usd";
 
     private static final RowMapper<UsageRecord> MAPPER = (rs, i) -> new UsageRecord(rs.getString(1),
             rs.getObject(2, LocalDateTime.class).toInstant(ZoneOffset.UTC), rs.getString(3), rs.getString(4), rs.getString(5), rs.getString(6),
-            rs.getString(7), rs.getString(8), rs.getString(9), rs.getLong(10), rs.getLong(11), rs.getLong(12),
-            rs.getLong(13), rs.getLong(14), rs.getLong(15), rs.getLong(16), (Double) rs.getObject(17, Double.class),
-            (Double) rs.getObject(18, Double.class));
+            rs.getString(7), rs.getString(9), rs.getString(10), rs.getLong(11), rs.getLong(12), rs.getLong(13),
+            rs.getLong(14), rs.getLong(15), rs.getLong(16), rs.getLong(17), (Double) rs.getObject(18, Double.class),
+            (Double) rs.getObject(19, Double.class), rs.getString(8));
 
     private final JdbcTemplate jdbc;
 
     public JdbcUsageStore(JdbcTemplate jdbc, String ddl) {
         this.jdbc = jdbc;
         TenantSchema.create(jdbc, ddl);
-        ensureContextColumn(ddl.contains("MergeTree"));
+        boolean clickHouse = ddl.contains("MergeTree");
+        ensureContextColumn(clickHouse);
+        ensureRunIdColumn(clickHouse);
     }
 
     /**
@@ -82,12 +86,22 @@ public class JdbcUsageStore implements UsageStore {
         jdbc.execute("ALTER TABLE token_usage ADD COLUMN context_tokens " + (clickHouse ? "Nullable(Int64)" : "BIGINT"));
     }
 
+    private void ensureRunIdColumn(boolean clickHouse) {
+        try {
+            jdbc.queryForList("SELECT run_id FROM token_usage WHERE 1 = 0");
+            return;
+        } catch (org.springframework.dao.DataAccessException missing) {
+            // the table predates the column
+        }
+        jdbc.execute("ALTER TABLE token_usage ADD COLUMN run_id " + (clickHouse ? "Nullable(String)" : "VARCHAR(64)"));
+    }
+
     @Override
     public void save(UsageRecord r) {
-        jdbc.update("INSERT INTO token_usage (company_id, " + COLUMNS + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                TenantSchema.company(), r.id(), utc(r.at()), r.user(), r.source(), r.agentId(), r.taskId(), r.sessionId(), r.cli(),
-                r.model(), r.input(), r.cacheRead(), r.cacheWrite(), r.cacheWrite1h(), r.output(), r.reasoning(),
-                r.contextTokens(), r.costUsd(), r.cliCostUsd());
+        jdbc.update("INSERT INTO token_usage (company_id, " + COLUMNS + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                TenantSchema.company(), r.id(), utc(r.at()), r.user(), r.source(), r.agentId(), r.taskId(), r.sessionId(),
+                r.runId(), r.cli(), r.model(), r.input(), r.cacheRead(), r.cacheWrite(), r.cacheWrite1h(), r.output(),
+                r.reasoning(), r.contextTokens(), r.costUsd(), r.cliCostUsd());
     }
 
     @Override

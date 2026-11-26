@@ -13,11 +13,13 @@
 - **Input half of R**: `GatewayInputBoundMode.HEURISTIC` (`body bytes/4`). Labelled in policy API as `inputBoundMode=HEURISTIC`, `hardInputBoundAvailable=false`.
 - **Policy**: `hardQuotaClis` defaults to `[]`; non-empty updates are **rejected** until `GatewayPolicy.HARD_INPUT_BOUND_AVAILABLE` is true.
 - **Admin UI**: copy states managed ≠ hard input bound; soft path is explicit.
-- **Bounded upstream timeouts**: connect / first-byte / idle / request (`superagent.gateway.*-timeout-seconds`).
+- **Bounded upstream timeouts**: connect / first-byte / idle / **whole-request** (covers trickle streams) via `superagent.gateway.*-timeout-seconds`.
 - **Run-token sweep**: expired / revoked in-memory grants removed on an interval.
 - **QUOTA_BUSY wait**: waits when `available < R` but `available + reserved >= R` (not only `available == 0`).
 - **Account upsert**: `putEmployee` / `putPool` no longer `REPLACE INTO` (preserves in-flight `reserved_tokens`).
 - **RECON mid-month top-up**: scheduled job moves UNALLOCATED → RECON_RESERVE up to company target (never mints).
+- **Usage identity**: `UsageRecord.runId` separate from chat `sessionId` (session rotation + settlement shadow); shadow looks up settlements by runId outside the report window.
+- **markPending**: locked + status-guarded so it cannot overwrite a concurrent SETTLED A.
 
 ## Deferred (not done in this change)
 

@@ -184,14 +184,15 @@ public class UpstreamProxy {
                     }
 
                     requireGrantStillUsable(grant, attempt);
-                    HttpResponse<InputStream> resp = sendWithFirstByteTimeout(req.build());
+                    long deadlineNanos = System.nanoTime() + timeouts.request().toNanos();
+                    HttpResponse<InputStream> resp = sendWithFirstByteTimeout(req.build(), deadlineNanos);
                     if (onResponseHeaders != null) {
                         onResponseHeaders.accept(resp.statusCode(),
                                 resp.headers().firstValue("content-type").orElse(null));
                     }
                     StreamingUsageProbe usageProbe = new StreamingUsageProbe();
                     try (InputStream in = resp.body()) {
-                        pumpBody(in, out, usageProbe);
+                        pumpBody(in, out, usageProbe, deadlineNanos);
                     }
                     usageProbe.finish();
                     settleOrPending(attempt, usageProbe);
@@ -240,13 +241,18 @@ public class UpstreamProxy {
         }
     }
 
-    private HttpResponse<InputStream> sendWithFirstByteTimeout(HttpRequest request)
+    private HttpResponse<InputStream> sendWithFirstByteTimeout(HttpRequest request, long deadlineNanos)
             throws IOException, InterruptedException {
+        long remainingMs = Math.max(1L, TimeUnit.NANOSECONDS.toMillis(deadlineNanos - System.nanoTime()));
+        long waitMs = Math.min(timeouts.firstByte().toMillis(), remainingMs);
         var future = http.sendAsync(request, HttpResponse.BodyHandlers.ofInputStream());
         try {
-            return future.get(timeouts.firstByte().toMillis(), TimeUnit.MILLISECONDS);
+            return future.get(waitMs, TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
             future.cancel(true);
+            if (System.nanoTime() >= deadlineNanos) {
+                throw new IOException("upstream request timeout after " + timeouts.request(), e);
+            }
             throw new IOException("upstream first-byte timeout after " + timeouts.firstByte(), e);
         } catch (ExecutionException e) {
             Throwable cause = e.getCause() == null ? e : e.getCause();
@@ -261,18 +267,34 @@ public class UpstreamProxy {
     }
 
     /**
-     * Copy upstream chunks to the CLI; close the upstream stream if no bytes arrive within idle timeout.
+     * Copy upstream chunks to the CLI. Closes the upstream stream on idle gap or absolute request deadline
+     * (whole-request budget covers a trickle that never goes idle).
      */
-    private void pumpBody(InputStream in, OutputStream out, StreamingUsageProbe usageProbe) throws IOException {
+    private void pumpBody(InputStream in, OutputStream out, StreamingUsageProbe usageProbe, long deadlineNanos)
+            throws IOException {
         AtomicLong lastActivityNanos = new AtomicLong(System.nanoTime());
         AtomicBoolean finished = new AtomicBoolean(false);
+        AtomicBoolean requestTimedOut = new AtomicBoolean(false);
+        AtomicBoolean idleTimedOut = new AtomicBoolean(false);
         long idleNanos = timeouts.idle().toNanos();
-        long checkMs = Math.min(1_000L, Math.max(50L, timeouts.idle().toMillis() / 4));
+        long checkMs = Math.min(250L, Math.max(25L, Math.min(timeouts.idle().toMillis(),
+                timeouts.request().toMillis()) / 4));
         ScheduledFuture<?> watch = idleWatch.scheduleWithFixedDelay(() -> {
             if (finished.get()) {
                 return;
             }
-            if (System.nanoTime() - lastActivityNanos.get() > idleNanos) {
+            long now = System.nanoTime();
+            if (now >= deadlineNanos) {
+                requestTimedOut.set(true);
+                try {
+                    in.close();
+                } catch (IOException ignored) {
+                    // reader will surface the close
+                }
+                return;
+            }
+            if (now - lastActivityNanos.get() > idleNanos) {
+                idleTimedOut.set(true);
                 try {
                     in.close();
                 } catch (IOException ignored) {
@@ -284,6 +306,9 @@ public class UpstreamProxy {
             byte[] buf = new byte[8192];
             int n;
             while ((n = in.read(buf)) >= 0) {
+                if (System.nanoTime() >= deadlineNanos) {
+                    throw new IOException("upstream request timeout after " + timeouts.request());
+                }
                 if (n == 0) {
                     continue;
                 }
@@ -293,8 +318,17 @@ public class UpstreamProxy {
                 usageProbe.accept(buf, 0, n);
             }
             out.flush();
+            if (requestTimedOut.get() || System.nanoTime() >= deadlineNanos) {
+                throw new IOException("upstream request timeout after " + timeouts.request());
+            }
+            if (idleTimedOut.get()) {
+                throw new IOException("upstream idle timeout after " + timeouts.idle());
+            }
         } catch (IOException e) {
-            if (System.nanoTime() - lastActivityNanos.get() > idleNanos) {
+            if (requestTimedOut.get() || System.nanoTime() >= deadlineNanos) {
+                throw new IOException("upstream request timeout after " + timeouts.request(), e);
+            }
+            if (idleTimedOut.get() || System.nanoTime() - lastActivityNanos.get() > idleNanos) {
                 throw new IOException("upstream idle timeout after " + timeouts.idle(), e);
             }
             throw e;

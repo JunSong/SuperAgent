@@ -117,7 +117,7 @@ public class TokenUsageService implements UsageRecorder {
             store.save(new UsageRecord(UUID.randomUUID().toString(), now, context.user(), context.source(),
                     context.agentId(), context.taskId(), context.sessionId(), context.cli(), u.model(), u.input(),
                     u.cacheRead(), u.cacheWrite(), u.cacheWrite1h(), u.output(), u.reasoning(), u.contextTokens(), usd,
-                    u.cliCostUsd()));
+                    u.cliCostUsd(), context.runId()));
             if (usd != null) {
                 total = (total == null ? 0 : total) + usd;
             }
@@ -129,7 +129,7 @@ public class TokenUsageService implements UsageRecorder {
     public void recordCost(UsageContext context, String model, double usd) {
         store.save(new UsageRecord(UUID.randomUUID().toString(), Instant.now(), context.user(), context.source(),
                 context.agentId(), context.taskId(), context.sessionId(), context.cli(), model, 0, 0, 0, 0, 0, 0, 0, usd,
-                null));
+                null, context.runId()));
     }
 
     /** USD by list price; null when the model has none. */
@@ -208,12 +208,24 @@ public class TokenUsageService implements UsageRecorder {
 
     private List<UsageRecord> loadForReport(GatewayReportMode mode, String user, Instant from, Instant to) {
         if (mode == GatewayReportMode.GATEWAY_PRIMARY) {
-            // Settlements are authoritative for a managed run. Shadow CLI only when sessionId equals the
-            // settlement runId (wired at record time). No amount/time heuristics — keep unmatched history.
+            // Settlements in the display window are authoritative totals. Shadow CLI by managed runId
+            // even when the settlement fell outside [from,to) (cross-midnight / delayed reconcile).
             List<UsageRecord> settlements = gatewaySettlements.between(user, from, to);
-            List<UsageRecord> legacy = store.between(user, from, to).stream()
+            List<UsageRecord> legacyCandidates = store.between(user, from, to).stream()
                     .filter(r -> !UsageContext.SOURCE_GATEWAY.equals(r.source()))
-                    .filter(r -> !shadowedBySettlement(r, settlements))
+                    .toList();
+            java.util.Set<String> candidateRunIds = new java.util.LinkedHashSet<>();
+            for (UsageRecord r : legacyCandidates) {
+                String key = shadowKey(r);
+                if (key != null) {
+                    candidateRunIds.add(key);
+                }
+            }
+            java.util.Set<String> settledRuns = candidateRunIds.isEmpty()
+                    ? java.util.Set.of()
+                    : gatewaySettlements.settledRunIds(user, candidateRunIds);
+            List<UsageRecord> legacy = legacyCandidates.stream()
+                    .filter(r -> !shadowedBySettledRun(r, settledRuns))
                     .toList();
             if (legacy.isEmpty()) {
                 return settlements;
@@ -231,29 +243,28 @@ public class TokenUsageService implements UsageRecorder {
     }
 
     /**
-     * Drop a CLI row only when it shares the managed run id ({@link UsageRecord#sessionId()}) with a
-     * settlement. One run may have many attempts — any matching settlement shadows the CLI aggregate.
+     * Prefer explicit {@link UsageRecord#runId()}; fall back to {@code sessionId} only for rows written before
+     * the run_id column (managed path used to stuff runId into sessionId).
      */
-    private static boolean shadowedBySettlement(UsageRecord cli, List<UsageRecord> settlements) {
-        if (cli == null || cli.sessionId() == null || cli.sessionId().isBlank()) {
+    static String shadowKey(UsageRecord r) {
+        if (r == null) {
+            return null;
+        }
+        if (r.runId() != null && !r.runId().isBlank()) {
+            return r.runId();
+        }
+        if (r.sessionId() != null && !r.sessionId().isBlank()) {
+            return r.sessionId();
+        }
+        return null;
+    }
+
+    private static boolean shadowedBySettledRun(UsageRecord cli, java.util.Set<String> settledRuns) {
+        if (cli == null || settledRuns == null || settledRuns.isEmpty()) {
             return false;
         }
-        for (UsageRecord s : settlements) {
-            if (s == null || s.sessionId() == null || s.sessionId().isBlank()) {
-                continue;
-            }
-            if (!cli.sessionId().equals(s.sessionId())) {
-                continue;
-            }
-            if (cli.cli() != null && s.cli() != null && !cli.cli().equals(s.cli())) {
-                continue;
-            }
-            if (cli.user() != null && s.user() != null && !cli.user().equals(s.user())) {
-                continue;
-            }
-            return true;
-        }
-        return false;
+        String key = shadowKey(cli);
+        return key != null && settledRuns.contains(key);
     }
 
     private static List<UsageDtos.Total> latestFirst(List<UsageDtos.Total> rows) {

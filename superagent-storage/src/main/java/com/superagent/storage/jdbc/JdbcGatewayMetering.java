@@ -528,35 +528,46 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
     public GatewayAttempt markPending(String attemptId, long actualTokens) {
         return tx.execute(status -> {
             String company = TenantSchema.company();
-            GatewayAttempt current = requireAttempt(company, attemptId);
-            if (current.status() == GatewayAttemptStatus.SETTLED) {
+            // Same lock as settle so a concurrent settle cannot be overwritten by a late A (I-3).
+            GatewayAttempt current = lockAttempt(company, attemptId);
+            if (current.status() == GatewayAttemptStatus.SETTLED
+                    || current.status() == GatewayAttemptStatus.CANCELLED) {
                 return current;
             }
             if (current.status() == GatewayAttemptStatus.PENDING_RECONCILIATION) {
                 if (actualTokens >= 0 && current.actualTokens() != actualTokens) {
-                    jdbc.update("""
+                    int n = jdbc.update("""
                             UPDATE gateway_attempt SET actual_tokens = ?
-                            WHERE company_id = ? AND id = ?
+                            WHERE company_id = ? AND id = ? AND status = ?
                             """,
-                            actualTokens, company, attemptId);
+                            actualTokens, company, attemptId,
+                            GatewayAttemptStatus.PENDING_RECONCILIATION.name());
+                    if (n != 1) {
+                        return requireAttempt(company, attemptId);
+                    }
                     return requireAttempt(company, attemptId);
                 }
                 return current;
             }
+            int n;
             if (actualTokens >= 0) {
-                jdbc.update("""
+                n = jdbc.update("""
                         UPDATE gateway_attempt SET status = ?, actual_tokens = ?
                         WHERE company_id = ? AND id = ? AND status IN (?, ?)
                         """,
                         GatewayAttemptStatus.PENDING_RECONCILIATION.name(), actualTokens, company, attemptId,
                         GatewayAttemptStatus.SENDING.name(), GatewayAttemptStatus.RESERVED.name());
             } else {
-                jdbc.update("""
+                n = jdbc.update("""
                         UPDATE gateway_attempt SET status = ?
                         WHERE company_id = ? AND id = ? AND status IN (?, ?)
                         """,
                         GatewayAttemptStatus.PENDING_RECONCILIATION.name(), company, attemptId,
                         GatewayAttemptStatus.SENDING.name(), GatewayAttemptStatus.RESERVED.name());
+            }
+            if (n != 1) {
+                // Lost the race to settle/cancel — return whatever won.
+                return requireAttempt(company, attemptId);
             }
             return requireAttempt(company, attemptId);
         });
@@ -814,8 +825,7 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
 
     /**
      * Vendor total A is one number; park it in input so {@link UsageRecord#total()} matches A.
-     * {@code sessionId} carries the managed {@code runId} so GATEWAY_PRIMARY can shadow CLI rows by
-     * exact run identity (not by amount/time heuristics).
+     * Managed {@code runId} is a dedicated field so chat {@code sessionId} stays untouched.
      */
     private static UsageRecord toUsageRecord(GatewayProjectionEvent e) {
         return new UsageRecord(
@@ -825,13 +835,44 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
                 UsageContext.SOURCE_GATEWAY,
                 null,
                 null,
-                e.runId(),
+                null,
                 e.cli(),
                 e.model(),
                 e.actualTokens(),
                 0, 0, 0, 0, 0, 0,
                 null,
-                null);
+                null,
+                e.runId());
+    }
+
+    @Override
+    public java.util.Set<String> settledRunIds(String user, java.util.Collection<String> runIds) {
+        if (runIds == null || runIds.isEmpty()) {
+            return java.util.Set.of();
+        }
+        List<String> ids = runIds.stream()
+                .filter(id -> id != null && !id.isBlank())
+                .distinct()
+                .limit(500)
+                .toList();
+        if (ids.isEmpty()) {
+            return java.util.Set.of();
+        }
+        String placeholders = String.join(",", java.util.Collections.nCopies(ids.size(), "?"));
+        List<Object> args = new ArrayList<>();
+        args.add(TenantSchema.company());
+        args.addAll(ids);
+        String byUser = "";
+        if (user != null) {
+            byUser = " AND payer_user_id = ?";
+            args.add(user);
+        }
+        String sql = """
+                SELECT DISTINCT run_id FROM gateway_projection
+                WHERE company_id = ? AND event_type = 'settlement'
+                  AND run_id IN (%s)
+                """.formatted(placeholders) + byUser;
+        return new java.util.LinkedHashSet<>(jdbc.query(sql, (rs, n) -> rs.getString(1), args.toArray()));
     }
 
     /**

@@ -1007,11 +1007,11 @@ public class ChatService implements org.springframework.context.SmartLifecycle {
         }
 
         // The tokens go on whoever sent the message (in a shared agent, that member), not the agent's owner.
-        // Managed: sessionId = runId so GATEWAY_PRIMARY can shadow CLI by exact run identity.
+        // sessionId stays the chat session (tooLong / latestChatTurn); runId is only for gateway shadowing.
         com.superagent.core.usage.UsageContext paying = new com.superagent.core.usage.UsageContext(user,
                 emitter.agent() != null && emitter.agent().isSuper() ? com.superagent.core.usage.UsageContext.SOURCE_SUPERAGENT
                         : com.superagent.core.usage.UsageContext.SOURCE_CHAT,
-                session.agentId(), null, managedRunId != null ? managedRunId : session.id(), cli);
+                session.agentId(), null, session.id(), cli, managedRunId);
         AgentEventSink sink = emitter.timer().tapTools(com.superagent.core.usage.UsageRecorder.tap(usage, paying, event -> {
             store.appendEvent(new AgentEvent(session.id(), assistantMessageId, event.seq(),
                     event.type(), event.payload(), event.createdAt()));

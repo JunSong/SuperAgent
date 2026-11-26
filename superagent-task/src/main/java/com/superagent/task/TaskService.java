@@ -1920,10 +1920,10 @@ public class TaskService implements TaskRecovery {
             managedRun = managedRuns.open(cli, task.id(), task.createdBy(), model);
             runCredential = managedRun.credential();
         }
-        String usageSessionId = managedRun != null ? managedRun.credential().id() : null;
+        String managedRunId = managedRun != null ? managedRun.credential().id() : null;
         com.superagent.core.usage.UsageContext paying = new com.superagent.core.usage.UsageContext(task.createdBy(),
                 com.superagent.core.usage.UsageContext.SOURCE_TASK,
-                taskAgents == null ? null : taskAgents.agentOf(task.id()).orElse(null), task.id(), usageSessionId, cli);
+                taskAgents == null ? null : taskAgents.agentOf(task.id()).orElse(null), task.id(), null, cli, managedRunId);
         AgentEventSink sink = timer.tapTools(event -> {
             if (event.type() == AgentEventType.TOKENS) {
                 Double usd = usage == null ? null : usage.record(paying, event.payload());

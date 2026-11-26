@@ -118,13 +118,12 @@ class TokenUsageServiceTest {
         // Same managed runId on CLI TOKENS + settlement → count once (42).
         Instant at = Instant.parse("2026-11-15T12:00:00Z");
         String runId = "run-shared-1";
-        rows.add(new UsageRecord("cli1", at, "ada", UsageContext.SOURCE_CHAT, "dev", null, runId,
-                "deepseek", "cli-model", 42, 0, 0, 0, 0, 0, 0, null, null));
+        rows.add(new UsageRecord("cli1", at, "ada", UsageContext.SOURCE_CHAT, "dev", null, "chat-session-1",
+                "deepseek", "cli-model", 42, 0, 0, 0, 0, 0, 0, null, null, runId));
         UsageRecord settled = new UsageRecord("p1", at, "ada",
-                UsageContext.SOURCE_GATEWAY, null, null, runId, "deepseek", "deepseek-chat",
-                42, 0, 0, 0, 0, 0, 0, null, null);
-        service.setGatewayReportForTest(() -> GatewayReportMode.GATEWAY_PRIMARY,
-                (user, from, to) -> List.of(settled));
+                UsageContext.SOURCE_GATEWAY, null, null, null, "deepseek", "deepseek-chat",
+                42, 0, 0, 0, 0, 0, 0, null, null, runId);
+        service.setGatewayReportForTest(() -> GatewayReportMode.GATEWAY_PRIMARY, settlementsOf(settled));
 
         UsageDtos.Summary s = service.summary("ada", Instant.EPOCH, Instant.now(), ZoneOffset.UTC);
         assertThat(s.reportMode()).isEqualTo("GATEWAY_PRIMARY");
@@ -138,10 +137,9 @@ class TokenUsageServiceTest {
         rows.add(new UsageRecord("cli-indep", at, "ada", UsageContext.SOURCE_CHAT, "dev", null,
                 "independent-session", "deepseek", "cli-model", 42, 0, 0, 0, 0, 0, 0, null, null));
         UsageRecord settled = new UsageRecord("p1", at, "ada",
-                UsageContext.SOURCE_GATEWAY, null, null, "another-turn-run", "deepseek", "deepseek-chat",
-                42, 0, 0, 0, 0, 0, 0, null, null);
-        service.setGatewayReportForTest(() -> GatewayReportMode.GATEWAY_PRIMARY,
-                (user, from, to) -> List.of(settled));
+                UsageContext.SOURCE_GATEWAY, null, null, null, "deepseek", "deepseek-chat",
+                42, 0, 0, 0, 0, 0, 0, null, null, "another-turn-run");
+        service.setGatewayReportForTest(() -> GatewayReportMode.GATEWAY_PRIMARY, settlementsOf(settled));
 
         UsageDtos.Summary s = service.summary("ada", Instant.EPOCH, Instant.now(), ZoneOffset.UTC);
         assertThat(s.total().total()).isEqualTo(84);
@@ -151,16 +149,15 @@ class TokenUsageServiceTest {
     void reviewMultiAttemptRunMustNotDoubleCount() {
         Instant at = Instant.parse("2026-11-15T12:00:00Z");
         String runId = "run-multi-attempt";
-        rows.add(new UsageRecord("cli-agg", at, "ada", UsageContext.SOURCE_CHAT, "dev", null, runId,
-                "deepseek", "cli-model", 100, 0, 0, 0, 0, 0, 0, null, null));
+        rows.add(new UsageRecord("cli-agg", at, "ada", UsageContext.SOURCE_CHAT, "dev", null, "s-agg",
+                "deepseek", "cli-model", 100, 0, 0, 0, 0, 0, 0, null, null, runId));
         UsageRecord a30 = new UsageRecord("g30", at, "ada",
-                UsageContext.SOURCE_GATEWAY, null, null, runId, "deepseek", "deepseek-chat",
-                30, 0, 0, 0, 0, 0, 0, null, null);
+                UsageContext.SOURCE_GATEWAY, null, null, null, "deepseek", "deepseek-chat",
+                30, 0, 0, 0, 0, 0, 0, null, null, runId);
         UsageRecord a70 = new UsageRecord("g70", at.plusSeconds(1), "ada",
-                UsageContext.SOURCE_GATEWAY, null, null, runId, "deepseek", "deepseek-chat",
-                70, 0, 0, 0, 0, 0, 0, null, null);
-        service.setGatewayReportForTest(() -> GatewayReportMode.GATEWAY_PRIMARY,
-                (user, from, to) -> List.of(a30, a70));
+                UsageContext.SOURCE_GATEWAY, null, null, null, "deepseek", "deepseek-chat",
+                70, 0, 0, 0, 0, 0, 0, null, null, runId);
+        service.setGatewayReportForTest(() -> GatewayReportMode.GATEWAY_PRIMARY, settlementsOf(a30, a70));
 
         UsageDtos.Summary s = service.summary("ada", Instant.EPOCH, Instant.now(), ZoneOffset.UTC);
         assertThat(s.total().total()).isEqualTo(100);
@@ -174,10 +171,9 @@ class TokenUsageServiceTest {
         service.record(new UsageContext("ada", UsageContext.SOURCE_CHAT, "dev", null, "legacy-session", "codex"),
                 "[{\"model\":\"codex-m\",\"input\":10,\"cacheRead\":0,\"cacheWrite\":0,\"cacheWrite1h\":0,\"output\":0,\"reasoning\":0}]");
         UsageRecord settled = new UsageRecord("p1", Instant.parse("2026-11-15T12:00:00Z"), "ada",
-                UsageContext.SOURCE_GATEWAY, null, null, "gw-turn", "deepseek", "deepseek-chat",
-                42, 0, 0, 0, 0, 0, 0, null, null);
-        service.setGatewayReportForTest(() -> GatewayReportMode.GATEWAY_PRIMARY,
-                (user, from, to) -> List.of(settled));
+                UsageContext.SOURCE_GATEWAY, null, null, null, "deepseek", "deepseek-chat",
+                42, 0, 0, 0, 0, 0, 0, null, null, "gw-turn");
+        service.setGatewayReportForTest(() -> GatewayReportMode.GATEWAY_PRIMARY, settlementsOf(settled));
 
         UsageDtos.Summary s = service.summary("ada", Instant.EPOCH, Instant.now(), ZoneOffset.UTC);
         assertThat(s.total().total()).isEqualTo(62); // 10 hist + 42 gw + 10 codex
@@ -187,12 +183,67 @@ class TokenUsageServiceTest {
 
     @Test
     void legacySummaryIgnoresGatewaySourceRows() {
-        rows.add(new UsageRecord("g1", Instant.now(), "ada", UsageContext.SOURCE_GATEWAY, null, null, "t", "deepseek",
-                "m", 100, 0, 0, 0, 0, 0, 0, null, null));
+        rows.add(new UsageRecord("g1", Instant.now(), "ada", UsageContext.SOURCE_GATEWAY, null, null, null, "deepseek",
+                "m", 100, 0, 0, 0, 0, 0, 0, null, null, "t"));
         service.record(new UsageContext("ada", UsageContext.SOURCE_CHAT, null, null, "s", "deepseek"),
                 "[{\"model\":\"cli\",\"input\":7,\"cacheRead\":0,\"cacheWrite\":0,\"cacheWrite1h\":0,\"output\":0,\"reasoning\":0}]");
         UsageDtos.Summary s = service.summary("ada", Instant.EPOCH, Instant.now(), ZoneOffset.UTC);
         assertThat(s.reportMode()).isEqualTo("LEGACY");
         assertThat(s.total().total()).isEqualTo(7);
+    }
+
+    @Test
+    void reviewWindowSplitMustNotResurrectCliShadow() {
+        Instant boundary = Instant.parse("2026-11-16T00:00:00Z");
+        String runId = "run-cross-midnight";
+        Instant settlementAt = boundary.minusSeconds(1);
+        Instant cliAt = boundary.plusSeconds(1);
+        rows.add(new UsageRecord("cli-late", cliAt, "ada", UsageContext.SOURCE_CHAT, "dev", null, "chat-s",
+                "deepseek", "cli-model", 42, 0, 0, 0, 0, 0, 0, null, null, runId));
+        UsageRecord settled = new UsageRecord("g-early", settlementAt, "ada",
+                UsageContext.SOURCE_GATEWAY, null, null, null, "deepseek", "deepseek-chat",
+                42, 0, 0, 0, 0, 0, 0, null, null, runId);
+        service.setGatewayReportForTest(() -> GatewayReportMode.GATEWAY_PRIMARY, new com.superagent.core.gateway.GatewaySettlementUsage() {
+            @Override
+            public List<UsageRecord> between(String user, Instant from, Instant to) {
+                return List.of(settled).stream()
+                        .filter(r -> !r.at().isBefore(from) && r.at().isBefore(to))
+                        .toList();
+            }
+
+            @Override
+            public java.util.Set<String> settledRunIds(String user, java.util.Collection<String> runIds) {
+                return runIds.contains(runId) ? java.util.Set.of(runId) : java.util.Set.of();
+            }
+        });
+
+        UsageDtos.Summary both = service.summary("ada", settlementAt.minusSeconds(10), cliAt.plusSeconds(10), ZoneOffset.UTC);
+        assertThat(both.total().total()).isEqualTo(42);
+
+        UsageDtos.Summary afterOnly = service.summary("ada", boundary, cliAt.plusSeconds(10), ZoneOffset.UTC);
+        assertThat(afterOnly.total().total()).isZero();
+    }
+
+    private static com.superagent.core.gateway.GatewaySettlementUsage settlementsOf(UsageRecord... all) {
+        List<UsageRecord> list = List.of(all);
+        return new com.superagent.core.gateway.GatewaySettlementUsage() {
+            @Override
+            public List<UsageRecord> between(String user, Instant from, Instant to) {
+                return list.stream()
+                        .filter(r -> !r.at().isBefore(from) && r.at().isBefore(to))
+                        .toList();
+            }
+
+            @Override
+            public java.util.Set<String> settledRunIds(String user, java.util.Collection<String> runIds) {
+                java.util.Set<String> out = new java.util.LinkedHashSet<>();
+                for (UsageRecord r : list) {
+                    if (r.runId() != null && runIds.contains(r.runId())) {
+                        out.add(r.runId());
+                    }
+                }
+                return out;
+            }
+        };
     }
 }

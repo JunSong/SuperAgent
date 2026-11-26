@@ -75,7 +75,32 @@ class GatewayMeteringTest {
                     assertThat(u.source()).isEqualTo(com.superagent.core.usage.UsageContext.SOURCE_GATEWAY);
                     assertThat(u.total()).isEqualTo(35);
                     assertThat(u.user()).isEqualTo("alice");
+                    assertThat(u.runId()).isEqualTo("run-1");
+                    assertThat(u.sessionId()).isNull();
                 });
+        assertThat(ledger.settledRunIds("alice", java.util.List.of("run-1", "other")))
+                .containsExactly("run-1");
+    }
+
+    @Test
+    void markPendingMustNotOverwriteSettledActual() {
+        JdbcGatewayMetering ledger = newLedger();
+        String period = "2026-11";
+        ledger.putEmployee(period, "alice", 200);
+        ledger.putPool(period, GatewayAccountType.RECON_RESERVE, 100);
+        GatewayAttempt attempt = ledger.reserve(new GatewayMetering.ReserveRequest(
+                "req-toctou", "turn-toctou", "run-toctou", "alice", "deepseek", "m", period, 60));
+        assertThat(ledger.beginSend(attempt.id())).isTrue();
+        GatewayAttempt pending = ledger.markPending(attempt.id(), 70);
+        assertThat(pending.status()).isEqualTo(GatewayAttemptStatus.PENDING_RECONCILIATION);
+        assertThat(pending.actualTokens()).isEqualTo(70);
+        // Settle wins; a late markPending with a different A must not rewrite SETTLED.
+        GatewayAttempt settled = ledger.settle(attempt.id(), 65);
+        assertThat(settled.status()).isEqualTo(GatewayAttemptStatus.SETTLED);
+        assertThat(settled.actualTokens()).isEqualTo(65);
+        GatewayAttempt after = ledger.markPending(attempt.id(), 999);
+        assertThat(after.status()).isEqualTo(GatewayAttemptStatus.SETTLED);
+        assertThat(after.actualTokens()).isEqualTo(65);
     }
 
     @Test

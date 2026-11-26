@@ -58,6 +58,10 @@ public class GatewayPolicyService implements GatewayReportPolicy {
         Map<String, String> all = store.all();
         List<String> managed = all.containsKey(MANAGED_CLIS) ? parseClis(all.get(MANAGED_CLIS)) : envManagedClis;
         List<String> hard = all.containsKey(HARD_QUOTA_CLIS) ? parseClis(all.get(HARD_QUOTA_CLIS)) : List.of();
+        // Defense in depth: ignore any residual DB hardQuotaClis until a proven input bound exists.
+        if (!GatewayPolicy.HARD_INPUT_BOUND_AVAILABLE) {
+            hard = List.of();
+        }
         return new GatewayPolicy(
                 intVal(all, PENDING_ALERT_HOURS, GatewayPolicy.DEFAULT_PENDING_ALERT_HOURS, 1, 168),
                 intVal(all, PENDING_TAKEOVER_DAYS, GatewayPolicy.DEFAULT_PENDING_TAKEOVER_BUSINESS_DAYS, 1, 30),

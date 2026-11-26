@@ -53,7 +53,8 @@ class SessionLengthTest {
         @Override public void recordModel(Agent agent, String model) { }
         @Override public void consolidateSoon(Agent agent) { }
         @Override public String read(Agent agent) { return "## 用户偏好\n- 回答用中文"; }
-        @Override public String handoff(Agent agent, List<ChatMessage> session, Duration timeout, Consumer<String> why) {
+        @Override public String handoff(Agent agent, List<ChatMessage> session, Duration timeout, Consumer<String> why,
+                                        String payerUserId, String turnId) {
             if (summaryThrows) {
                 throw new IllegalStateException("boom");
             }
