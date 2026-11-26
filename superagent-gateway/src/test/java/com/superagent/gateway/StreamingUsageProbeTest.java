@@ -23,6 +23,24 @@ class StreamingUsageProbeTest {
         StreamingUsageProbe probe = new StreamingUsageProbe();
         feed(probe, "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":50,\"output_tokens\":0}}}\n\n");
         feed(probe, "data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":8}}\n\n");
+        feed(probe, "data: {\"type\":\"message_stop\"}\n\n");
+        probe.finish();
+        assertThat(probe.total()).hasValue(58);
+    }
+
+    @Test
+    void incompleteAnthropicStreamMustRemainPending() {
+        StreamingUsageProbe probe = new StreamingUsageProbe();
+        feed(probe, "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":50,\"output_tokens\":0}}}\n\n");
+        feed(probe, "data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\"}}\n\n");
+        probe.finish();
+        assertThat(probe.total()).isEmpty();
+    }
+
+    @Test
+    void responsesCompletedUsageMustBeRead() {
+        StreamingUsageProbe probe = new StreamingUsageProbe();
+        feed(probe, "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":50,\"output_tokens\":8}}}\n\n");
         probe.finish();
         assertThat(probe.total()).hasValue(58);
     }

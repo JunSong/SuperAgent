@@ -51,6 +51,9 @@ public class ManagedRunFactory {
         if (company == null || company.apiKey() == null || company.apiKey().isBlank()) {
             throw new ForbiddenException("本公司还没有配置 " + cli + " 的 API Key：受管网关不能使用机器上的登录态");
         }
+        if (!leases.payerMayUse(cli, payerUserId)) {
+            throw new ForbiddenException("本月尚未分配模型额度，无法使用受管 CLI " + cli);
+        }
         ModelRunLease lease = leases.issue(turnId, runId, payerUserId, cli, model, ttl);
         return ManagedRun.ofLease(lease);
     }

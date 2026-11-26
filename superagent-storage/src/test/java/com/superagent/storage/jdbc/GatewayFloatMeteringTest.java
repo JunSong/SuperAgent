@@ -72,6 +72,22 @@ class GatewayFloatMeteringTest {
     }
 
     @Test
+    void newTurnAtExactlyBaseMustBeRejected() {
+        JdbcGatewayMetering ledger = newLedger();
+        // used == B, F still unused — a brand-new turn must not claim float (R04).
+        ledger.putEmployee(PERIOD, "alice", 0, B, B, F);
+        ledger.putPool(PERIOD, com.superagent.core.gateway.GatewayAccountType.FLOAT_POOL, F);
+
+        assertThatThrownBy(() -> ledger.reserve(req("r-new", "turn-new", 5)))
+                .isInstanceOf(GatewayQuotaExhaustedException.class)
+                .hasMessageContaining("QUOTA_EXHAUSTED");
+        assertThat(ledger.findEmployee(PERIOD, "alice")).hasValueSatisfying(acc -> {
+            assertThat(acc.floatTurnId()).isNull();
+            assertThat(acc.available()).isZero();
+        });
+    }
+
+    @Test
     void onlyOneWindowClaimsFloat() throws Exception {
         JdbcGatewayMetering ledger = newLedger();
         ledger.putEmployee(PERIOD, "alice", 5_000, 995_000, B, F);

@@ -275,17 +275,15 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
             String floatTurn = account.floatTurnId();
             boolean isFloatTurn = floatTurn != null && floatTurn.equals(request.turnId());
 
+            // New turns cannot open on float alone once base is exhausted (#34 / R04).
             if (used >= b && !isFloatTurn) {
-                if (f > 0 && floatTurn == null && used + r > b) {
-                    // fall through to claim below
-                } else if (used >= b) {
-                    throw new GatewayQuotaExhaustedException(
-                            "本月基础额度已用尽（QUOTA_EXHAUSTED）");
-                }
+                throw new GatewayQuotaExhaustedException(
+                        "本月基础额度已用尽（QUOTA_EXHAUSTED）");
             }
 
             if (used + r > b) {
                 if (floatTurn == null) {
+                    // Crossing B mid-turn (used < B): claim F for this turn only.
                     if (f <= 0) {
                         throw new GatewayQuotaInsufficientException(
                                 "可用额度不足：需要预占 " + r + " tokens（QUOTA_INSUFFICIENT）");
@@ -383,13 +381,14 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
                 throw new IllegalStateException("attempt already settled with A=" + current.actualTokens());
             }
             if (current.status() != GatewayAttemptStatus.SENDING
-                    && current.status() != GatewayAttemptStatus.PENDING_RECONCILIATION
-                    && current.status() != GatewayAttemptStatus.RESERVED) {
+                    && current.status() != GatewayAttemptStatus.PENDING_RECONCILIATION) {
                 throw new IllegalStateException("cannot settle attempt in status " + current.status());
             }
             long r = current.reservedTokens();
-            long a = Math.min(actualTokens, r);
-            long refund = r - a;
+            long a = actualTokens; // full vendor usage — never silently truncate (C1 / R03)
+            long employeeCharge = Math.min(a, r);
+            long overage = a - employeeCharge;
+            long refund = r - employeeCharge;
             int moved = jdbc.update("""
                     UPDATE gateway_account
                     SET available_tokens = available_tokens + ?,
@@ -398,10 +397,15 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
                     WHERE company_id = ? AND period = ? AND account_type = ? AND owner_id = ?
                       AND reserved_tokens >= ?
                     """,
-                    refund, r, a, company, current.period(), GatewayAccountType.EMPLOYEE.name(),
+                    refund, r, employeeCharge, company, current.period(), GatewayAccountType.EMPLOYEE.name(),
                     current.payerUserId(), r);
             if (moved == 0) {
                 throw new IllegalStateException("account reserved balance missing for attempt " + attemptId);
+            }
+            if (overage > 0) {
+                debitPool(company, current.period(), GatewayAccountType.RECON_RESERVE, overage);
+                writeLedger(company, "overage:" + attemptId, 1, current.period(), POOL_OWNER,
+                        -overage, 0, 0, "OVERAGE", attemptId, digest("overage", attemptId, overage));
             }
             jdbc.update("""
                     UPDATE gateway_attempt SET status = ?, actual_tokens = ?
@@ -409,7 +413,7 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
                     """,
                     GatewayAttemptStatus.SETTLED.name(), a, company, attemptId);
             writeLedger(company, "settle:" + attemptId, 1, current.period(), current.payerUserId(),
-                    refund, -r, a, "SETTLE", attemptId, null);
+                    refund, -r, employeeCharge, "SETTLE", attemptId, null);
             writeSettlementProjection(company, current, a);
             return requireAttempt(company, attemptId);
         });
@@ -442,13 +446,21 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
         tx.executeWithoutResult(status -> {
             String company = TenantSchema.company();
             GatewayAttempt current = findAttempt(company, attemptId).orElse(null);
-            if (current == null || current.status() == GatewayAttemptStatus.CANCELLED
-                    || current.status() == GatewayAttemptStatus.SETTLED
-                    || current.status() != GatewayAttemptStatus.RESERVED) {
+            if (current == null || current.status() != GatewayAttemptStatus.RESERVED) {
                 return;
             }
             long r = current.reservedTokens();
-            jdbc.update("""
+            // Attempt first: if settle won the race, both updates no-op and we write no ledger (C5).
+            int cancelled = jdbc.update("""
+                    UPDATE gateway_attempt SET status = ?
+                    WHERE company_id = ? AND id = ? AND status = ?
+                    """,
+                    GatewayAttemptStatus.CANCELLED.name(), company, attemptId,
+                    GatewayAttemptStatus.RESERVED.name());
+            if (cancelled != 1) {
+                return;
+            }
+            int released = jdbc.update("""
                     UPDATE gateway_account
                     SET available_tokens = available_tokens + ?, reserved_tokens = reserved_tokens - ?
                     WHERE company_id = ? AND period = ? AND account_type = ? AND owner_id = ?
@@ -456,12 +468,9 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
                     """,
                     r, r, company, current.period(), GatewayAccountType.EMPLOYEE.name(),
                     current.payerUserId(), r);
-            jdbc.update("""
-                    UPDATE gateway_attempt SET status = ?
-                    WHERE company_id = ? AND id = ? AND status = ?
-                    """,
-                    GatewayAttemptStatus.CANCELLED.name(), company, attemptId,
-                    GatewayAttemptStatus.RESERVED.name());
+            if (released != 1) {
+                throw new IllegalStateException("cancel released 0 account rows for attempt " + attemptId);
+            }
             writeLedger(company, "cancel:" + attemptId, 1, current.period(), current.payerUserId(),
                     r, -r, 0, "CANCEL", attemptId, null);
         });
@@ -537,15 +546,17 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
                 return findEmployee(period, fromUserId).orElseThrow();
             }
             String company = TenantSchema.company();
+            // Only base remainder is reclaimable — not float that was merged into available (R05).
             int n = jdbc.update("""
                     UPDATE gateway_account
                     SET available_tokens = available_tokens - ?, base_quota = GREATEST(0, base_quota - ?)
                     WHERE company_id = ? AND period = ? AND account_type = ? AND owner_id = ?
                       AND available_tokens >= ?
+                      AND ? <= GREATEST(0, base_quota - settled_tokens - reserved_tokens)
                     """,
-                    amount, amount, company, period, GatewayAccountType.EMPLOYEE.name(), fromUserId, amount);
+                    amount, amount, company, period, GatewayAccountType.EMPLOYEE.name(), fromUserId, amount, amount);
             if (n == 0) {
-                throw new GatewayQuotaInsufficientException("可回收余额不足");
+                throw new GatewayQuotaInsufficientException("可回收余额不足（上浮额度不可回收）");
             }
             ensurePoolRow(company, period, GatewayAccountType.UNALLOCATED);
             jdbc.update("""
@@ -573,15 +584,17 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
             }
             String company = TenantSchema.company();
             ensureEmployeeRow(company, period, toUserId);
+            // Float remainder rides in available_tokens but must not become another employee's B (R05).
             int n = jdbc.update("""
                     UPDATE gateway_account SET available_tokens = available_tokens - ?,
                       base_quota = GREATEST(0, base_quota - ?)
                     WHERE company_id = ? AND period = ? AND account_type = ? AND owner_id = ?
                       AND available_tokens >= ?
+                      AND ? <= GREATEST(0, base_quota - settled_tokens - reserved_tokens)
                     """,
-                    amount, amount, company, period, GatewayAccountType.EMPLOYEE.name(), fromUserId, amount);
+                    amount, amount, company, period, GatewayAccountType.EMPLOYEE.name(), fromUserId, amount, amount);
             if (n == 0) {
-                throw new GatewayQuotaInsufficientException("可用余额不足，无法转账");
+                throw new GatewayQuotaInsufficientException("可用余额不足，无法转账（上浮额度不可转让）");
             }
             jdbc.update("""
                     UPDATE gateway_account SET available_tokens = available_tokens + ?,

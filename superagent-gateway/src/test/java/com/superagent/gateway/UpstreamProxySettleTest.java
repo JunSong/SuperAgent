@@ -62,8 +62,9 @@ class UpstreamProxySettleTest {
             exchange.getResponseBody().write(body);
             exchange.close();
         });
-        stub.createContext("/openai/v1/no-usage", exchange -> {
-            byte[] body = "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\ndata: [DONE]\n\n"
+        stub.createContext("/openai/v1/responses", exchange -> {
+            // Incomplete Responses stream: usage never finalized → pending (R06).
+            byte[] body = "data: {\"type\":\"response.created\"}\n\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\"}}\n\n"
                     .getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
             exchange.sendResponseHeaders(200, body.length);
@@ -96,7 +97,7 @@ class UpstreamProxySettleTest {
         byte[] reqBody = "{\"model\":\"deepseek-chat\",\"max_tokens\":100}".getBytes(StandardCharsets.UTF_8);
         long r = ReservationEstimator.estimate(reqBody);
         ModelRunLease lease = TenantContext.call("co1",
-                () -> grants.issue("t1", "r1", "alice", "deepseek", "m", Duration.ofMinutes(5)));
+                () -> grants.issue("t1", "r1", "alice", "deepseek", "deepseek-chat", Duration.ofMinutes(5)));
 
         int status = proxy.forward(grants.require("Bearer " + lease.token()), "openai", "/v1/chat/completions",
                 "POST", Map.of(), reqBody, new ByteArrayOutputStream(), (c, ct) -> {
@@ -129,7 +130,7 @@ class UpstreamProxySettleTest {
         ModelRunLease lease = TenantContext.call("co1",
                 () -> grants.issue("t2", "r2", "alice", "deepseek", "m", Duration.ofMinutes(5)));
 
-        proxy.forward(grants.require("Bearer " + lease.token()), "openai", "/v1/no-usage",
+        proxy.forward(grants.require("Bearer " + lease.token()), "openai", "/v1/responses",
                 "POST", Map.of(), reqBody, new ByteArrayOutputStream(), (c, ct) -> {
                 });
         assertThat(ledger.lastSettledA).isEqualTo(-1);
@@ -217,15 +218,15 @@ class UpstreamProxySettleTest {
         public GatewayAttempt settle(String attemptId, long actualTokens) {
             GatewayAttempt a = attempts.get(attemptId);
             long r = a.reservedTokens();
-            long spent = Math.min(actualTokens, r);
-            long refund = r - spent;
+            long employeeCharge = Math.min(actualTokens, r);
+            long refund = r - employeeCharge;
             String k = key(a.period(), a.payerUserId());
             available.get(k).addAndGet(refund);
             reserved.get(k).addAndGet(-r);
-            settled.get(k).addAndGet(spent);
-            lastSettledA = spent;
+            settled.get(k).addAndGet(employeeCharge);
+            lastSettledA = actualTokens; // full A
             GatewayAttempt done = new GatewayAttempt(a.id(), a.requestId(), a.attemptNo(), a.turnId(), a.runId(),
-                    a.payerUserId(), a.cli(), a.model(), a.period(), r, spent, GatewayAttemptStatus.SETTLED);
+                    a.payerUserId(), a.cli(), a.model(), a.period(), r, actualTokens, GatewayAttemptStatus.SETTLED);
             attempts.put(attemptId, done);
             return done;
         }

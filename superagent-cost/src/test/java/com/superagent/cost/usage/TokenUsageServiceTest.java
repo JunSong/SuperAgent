@@ -115,7 +115,8 @@ class TokenUsageServiceTest {
 
     @Test
     void gatewayPrimarySummaryUsesSettlementsNotCli() {
-        service.record(new UsageContext("ada", UsageContext.SOURCE_CHAT, "dev", null, "s1", "deepseek"),
+        // Same sessionId as settlement → CLI shadow row is dropped (no double-count).
+        service.record(new UsageContext("ada", UsageContext.SOURCE_CHAT, "dev", null, "turn-1", "deepseek"),
                 "[{\"model\":\"cli-model\",\"input\":999,\"cacheRead\":0,\"cacheWrite\":0,\"cacheWrite1h\":0,\"output\":1,\"reasoning\":0}]");
         UsageRecord settled = new UsageRecord("p1", Instant.parse("2026-11-15T12:00:00Z"), "ada",
                 UsageContext.SOURCE_GATEWAY, null, null, "turn-1", "deepseek", "deepseek-chat",
@@ -127,6 +128,22 @@ class TokenUsageServiceTest {
         assertThat(s.reportMode()).isEqualTo("GATEWAY_PRIMARY");
         assertThat(s.total().total()).isEqualTo(42);
         assertThat(s.byModel()).singleElement().extracting(UsageDtos.Total::key).isEqualTo("deepseek-chat");
+    }
+
+    @Test
+    void gatewayPrimaryKeepsUnmanagedAndHistoricalCliRows() {
+        service.record(new UsageContext("ada", UsageContext.SOURCE_CHAT, "dev", null, "legacy-session", "codex"),
+                "[{\"model\":\"codex-m\",\"input\":10,\"cacheRead\":0,\"cacheWrite\":0,\"cacheWrite1h\":0,\"output\":0,\"reasoning\":0}]");
+        UsageRecord settled = new UsageRecord("p1", Instant.parse("2026-11-15T12:00:00Z"), "ada",
+                UsageContext.SOURCE_GATEWAY, null, null, "gw-turn", "deepseek", "deepseek-chat",
+                42, 0, 0, 0, 0, 0, 0, null, null);
+        service.setGatewayReportForTest(() -> GatewayReportMode.GATEWAY_PRIMARY,
+                (user, from, to) -> List.of(settled));
+
+        UsageDtos.Summary s = service.summary("ada", Instant.EPOCH, Instant.now(), ZoneOffset.UTC);
+        assertThat(s.total().total()).isEqualTo(52);
+        assertThat(s.byModel()).extracting(UsageDtos.Total::key)
+                .containsExactlyInAnyOrder("deepseek-chat", "codex-m");
     }
 
     @Test

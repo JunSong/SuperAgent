@@ -43,6 +43,7 @@ class ManagedRunFactoryTest {
                 .thenReturn(new CredentialService.Choice(new RunCredential("k1", "https://api", "sk-co", false)));
         ModelRunLeaseService leases = mock(ModelRunLeaseService.class);
         when(leases.managed("deepseek")).thenReturn(true);
+        when(leases.payerMayUse("deepseek", "alice")).thenReturn(true);
         when(leases.issue(eq("turn-1"), eq("run-1"), eq("alice"), eq("deepseek"), eq("deepseek-chat"), any()))
                 .thenReturn(new ModelRunLease("tok", "http://gw", "run-1", "turn-1", "deepseek", "deepseek-chat"));
 
@@ -64,6 +65,7 @@ class ManagedRunFactoryTest {
                 .thenReturn(new CredentialService.Choice(new RunCredential("k1", null, null, false)));
         ModelRunLeaseService leases = mock(ModelRunLeaseService.class);
         when(leases.managed("deepseek")).thenReturn(true);
+        when(leases.payerMayUse(any(), any())).thenReturn(true);
 
         ManagedRunFactory factory = new ManagedRunFactory(credentials);
         factory.setLeases(leases);
@@ -73,12 +75,30 @@ class ManagedRunFactoryTest {
     }
 
     @Test
+    void managedWithoutQuotaIsForbidden() {
+        CredentialService credentials = mock(CredentialService.class);
+        when(credentials.current("deepseek"))
+                .thenReturn(new CredentialService.Choice(new RunCredential("k1", "https://api", "sk", false)));
+        ModelRunLeaseService leases = mock(ModelRunLeaseService.class);
+        when(leases.managed("deepseek")).thenReturn(true);
+        when(leases.payerMayUse("deepseek", "alice")).thenReturn(false);
+
+        ManagedRunFactory factory = new ManagedRunFactory(credentials);
+        factory.setLeases(leases);
+
+        assertThatThrownBy(() -> factory.open("deepseek", "t", "alice", "m"))
+                .isInstanceOf(ForbiddenException.class)
+                .hasMessageContaining("额度");
+    }
+
+    @Test
     void closeRevokesLease() {
         CredentialService credentials = mock(CredentialService.class);
         when(credentials.current("deepseek"))
                 .thenReturn(new CredentialService.Choice(new RunCredential("k1", "https://api", "sk", false)));
         ModelRunLeaseService leases = mock(ModelRunLeaseService.class);
         when(leases.managed("deepseek")).thenReturn(true);
+        when(leases.payerMayUse(any(), any())).thenReturn(true);
         when(leases.issue(any(), any(), any(), any(), any(), any()))
                 .thenReturn(new ModelRunLease("tok", "http://gw", "r", "t", "deepseek", "m"));
 

@@ -90,6 +90,35 @@ class GatewayBudgetOpsTest {
     }
 
     @Test
+    void floatMustNotBecomeAnotherEmployeesBase() {
+        JdbcGatewayMetering ledger = newLedger();
+        ledger.putPool(PERIOD, GatewayAccountType.UNALLOCATED, 0);
+        ledger.putPool(PERIOD, GatewayAccountType.FLOAT_POOL, 10);
+        // B=100, settled=95, available=5, F=10 — claim float then settle 10 so remaining 5 is float-only.
+        ledger.putEmployee(PERIOD, "alice", 5, 95, 100, 10);
+        ledger.putEmployee(PERIOD, "bob", 0, 0, 0, 0);
+
+        var hold = ledger.reserve(new GatewayMetering.ReserveRequest(
+                "f-cross", "turn-f", "run-f", "alice", "deepseek", "m", PERIOD, 10));
+        assertThat(ledger.beginSend(hold.id())).isTrue();
+        ledger.settle(hold.id(), 10);
+        assertThat(ledger.findEmployee(PERIOD, "alice")).hasValueSatisfying(a -> {
+            assertThat(a.settled()).isEqualTo(105);
+            assertThat(a.available()).isEqualTo(5);
+            assertThat(a.floatTurnId()).isEqualTo("turn-f");
+        });
+
+        assertThatThrownBy(() -> ledger.transfer("tx-float", PERIOD, "alice", "bob", 5, "admin"))
+                .isInstanceOf(GatewayQuotaInsufficientException.class)
+                .hasMessageContaining("上浮");
+        assertThat(ledger.findEmployee(PERIOD, "alice")).hasValueSatisfying(a -> assertThat(a.available()).isEqualTo(5));
+        assertThat(ledger.findEmployee(PERIOD, "bob")).hasValueSatisfying(a -> {
+            assertThat(a.available()).isZero();
+            assertThat(a.baseQuota()).isZero();
+        });
+    }
+
+    @Test
     void setAndApplyDefaultFloat() {
         JdbcGatewayMetering ledger = newLedger();
         ledger.putPool(PERIOD, GatewayAccountType.UNALLOCATED, 100);

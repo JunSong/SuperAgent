@@ -6,6 +6,7 @@ import com.superagent.core.error.ForbiddenException;
 import com.superagent.core.gateway.GatewayQuotaBusyException;
 import com.superagent.core.gateway.GatewayQuotaExhaustedException;
 import com.superagent.core.gateway.GatewayQuotaInsufficientException;
+import com.superagent.gateway.GatewayRoutePolicy;
 import com.superagent.gateway.ModelRunGrant;
 import com.superagent.gateway.ModelRunGrants;
 import com.superagent.gateway.UpstreamProxy;
@@ -81,6 +82,15 @@ public class GatewayController {
             writeError(response, HttpServletResponse.SC_REQUEST_ENTITY_TOO_LARGE, "request body too large");
             return;
         }
+        try {
+            GatewayRoutePolicy.assertAllowed(proto, request.getMethod(), suffix, grant.model(), body);
+        } catch (ForbiddenException e) {
+            writeError(response, HttpServletResponse.SC_FORBIDDEN, e.getMessage());
+            return;
+        } catch (ModelRunGrants.UnauthorizedGatewayException e) {
+            writeError(response, HttpServletResponse.SC_UNAUTHORIZED, e.getMessage());
+            return;
+        }
 
         Map<String, String> headers = copyHeaders(request);
         response.setStatus(HttpServletResponse.SC_OK);
@@ -123,6 +133,10 @@ public class GatewayController {
         } catch (ForbiddenException e) {
             if (!response.isCommitted()) {
                 writeError(response, HttpServletResponse.SC_FORBIDDEN, e.getMessage());
+            }
+        } catch (ModelRunGrants.UnauthorizedGatewayException e) {
+            if (!response.isCommitted()) {
+                writeError(response, HttpServletResponse.SC_UNAUTHORIZED, e.getMessage());
             }
         } catch (RuntimeException | IOException e) {
             log.warn("gateway forward failed run={}: {}", grant.runId(), e.getMessage());
@@ -184,8 +198,13 @@ public class GatewayController {
     }
 
     static String suffixAfterProtocol(String uri, String protocol) {
-        String marker = "/model/" + protocol;
-        int i = uri.indexOf(marker);
+        if (uri == null || protocol == null) {
+            return "";
+        }
+        // Match case-insensitively: clients may send /Model/ANTHROPIC/... while proto is lowercased.
+        String lowerUri = uri.toLowerCase(Locale.ROOT);
+        String marker = "/model/" + protocol.toLowerCase(Locale.ROOT);
+        int i = lowerUri.indexOf(marker);
         if (i < 0) {
             return "";
         }

@@ -23,6 +23,14 @@ class VendorUsageParserTest {
     }
 
     @Test
+    void responsesCompletedNestedUsage() {
+        var s = VendorUsageParser.parse("""
+                {"type":"response.completed","response":{"usage":{"input_tokens":50,"output_tokens":8}}}
+                """).orElseThrow();
+        assertThat(s.total()).isEqualTo(58);
+    }
+
+    @Test
     void ignoresDoneAndEmpty() {
         assertThat(VendorUsageParser.parse("[DONE]")).isEmpty();
         assertThat(VendorUsageParser.parse("{}")).isEmpty();

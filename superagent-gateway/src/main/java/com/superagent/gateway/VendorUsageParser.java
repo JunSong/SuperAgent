@@ -43,6 +43,10 @@ final class VendorUsageParser {
             usage = root.path("message").path("usage");
         }
         if (!usage.isObject()) {
+            // OpenAI Responses: usage sits under response.usage on response.completed (R07).
+            usage = root.path("response").path("usage");
+        }
+        if (!usage.isObject()) {
             return Optional.empty();
         }
         // OpenAI / DeepSeek chat.completions — prompt already includes cache.

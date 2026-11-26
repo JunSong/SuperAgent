@@ -27,4 +27,13 @@ class ReservationEstimatorTest {
         assertThat(ReservationEstimator.estimate(body))
                 .isEqualTo((body.length + 3) / 4 + ReservationEstimator.OUTPUT_RESERVE_CAP);
     }
+
+    @Test
+    void clampsOutboundMaxTokensToReservedOutput() {
+        byte[] body = "{\"max_tokens\":256000,\"messages\":[]}".getBytes(StandardCharsets.UTF_8);
+        ReservationEstimator.Prepared prepared = ReservationEstimator.prepare(body);
+        assertThat(prepared.outputCap()).isEqualTo(ReservationEstimator.OUTPUT_RESERVE_CAP);
+        assertThat(ReservationEstimator.asUtf8(prepared.body())).contains("\"max_tokens\":32768");
+        assertThat(ReservationEstimator.asUtf8(prepared.body())).doesNotContain("256000");
+    }
 }

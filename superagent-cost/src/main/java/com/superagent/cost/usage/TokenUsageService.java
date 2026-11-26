@@ -208,7 +208,27 @@ public class TokenUsageService implements UsageRecorder {
 
     private List<UsageRecord> loadForReport(GatewayReportMode mode, String user, Instant from, Instant to) {
         if (mode == GatewayReportMode.GATEWAY_PRIMARY) {
-            return gatewaySettlements.between(user, from, to);
+            // Settlements are authoritative for managed calls; keep historical / unmanaged CLI rows (R09).
+            List<UsageRecord> settlements = gatewaySettlements.between(user, from, to);
+            java.util.HashSet<String> coveredSessions = new java.util.HashSet<>();
+            for (UsageRecord r : settlements) {
+                if (r.sessionId() != null && !r.sessionId().isBlank()) {
+                    coveredSessions.add(r.sessionId());
+                }
+            }
+            List<UsageRecord> legacy = store.between(user, from, to).stream()
+                    .filter(r -> !UsageContext.SOURCE_GATEWAY.equals(r.source()))
+                    .filter(r -> r.sessionId() == null || r.sessionId().isBlank()
+                            || !coveredSessions.contains(r.sessionId()))
+                    .toList();
+            if (legacy.isEmpty()) {
+                return settlements;
+            }
+            List<UsageRecord> merged = new ArrayList<>(settlements.size() + legacy.size());
+            merged.addAll(settlements);
+            merged.addAll(legacy);
+            merged.sort(Comparator.comparing(UsageRecord::at, Comparator.nullsLast(Comparator.naturalOrder())));
+            return merged;
         }
         // LEGACY / SHADOW: CLI (and other non-gateway) rows only — avoid double-count if any gateway rows exist.
         return store.between(user, from, to).stream()

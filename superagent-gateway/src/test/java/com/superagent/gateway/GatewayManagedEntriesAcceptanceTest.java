@@ -1,6 +1,10 @@
 package com.superagent.gateway;
 
 import com.superagent.core.chat.RunCredential;
+import com.superagent.core.gateway.GatewayAccount;
+import com.superagent.core.gateway.GatewayAccountType;
+import com.superagent.core.gateway.GatewayMetering;
+import com.superagent.core.gateway.GatewayQuotaMode;
 import com.superagent.core.gateway.ManagedRun;
 import com.superagent.core.tenant.TenantContext;
 import com.superagent.platform.provider.CredentialService;
@@ -9,11 +13,13 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
 import java.time.Duration;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -29,7 +35,7 @@ class GatewayManagedEntriesAcceptanceTest {
         CredentialService credentials = mock(CredentialService.class);
         when(credentials.current(eq("deepseek")))
                 .thenReturn(new CredentialService.Choice(new RunCredential("k1", "https://api", "sk-co", false)));
-        ModelRunGrants grants = new ModelRunGrants(Set.of("deepseek"), "http://gw", Clock.systemUTC());
+        ModelRunGrants grants = grantsWithQuota(Set.of("deepseek"));
         ManagedRunFactory factory = new ManagedRunFactory(credentials);
         factory.setLeases(grants);
 
@@ -60,7 +66,7 @@ class GatewayManagedEntriesAcceptanceTest {
                 .thenReturn(new CredentialService.Choice(new RunCredential("k1", "https://api", "sk", false)));
         when(credentials.current(eq("claude")))
                 .thenReturn(new CredentialService.Choice(new RunCredential("k2", "https://api", "sk2", false)));
-        ModelRunGrants grants = new ModelRunGrants(Set.of("deepseek", "claude"), "http://gw", Clock.systemUTC());
+        ModelRunGrants grants = grantsWithQuota(Set.of("deepseek", "claude"));
         ManagedRunFactory factory = new ManagedRunFactory(credentials);
         factory.setLeases(grants);
 
@@ -88,7 +94,7 @@ class GatewayManagedEntriesAcceptanceTest {
         CredentialService credentials = mock(CredentialService.class);
         when(credentials.current(eq("deepseek")))
                 .thenReturn(new CredentialService.Choice(new RunCredential("k1", "https://api", "sk", false)));
-        ModelRunGrants grants = new ModelRunGrants(Set.of("deepseek"), "http://gw", Clock.systemUTC());
+        ModelRunGrants grants = grantsWithQuota(Set.of("deepseek"));
         ManagedRunFactory factory = new ManagedRunFactory(credentials);
         factory.setLeases(grants);
 
@@ -99,5 +105,16 @@ class GatewayManagedEntriesAcceptanceTest {
         assertThat(g.turnId()).isEqualTo(taskId);
         assertThat(g.payerUserId()).isEqualTo("creator");
         run.close(grants);
+    }
+
+    /** Managed factory refuses when payerMayUse is false; seed a LIMITED account for acceptance paths. */
+    private static ModelRunGrants grantsWithQuota(Set<String> managed) {
+        ModelRunGrants grants = new ModelRunGrants(managed, "http://gw", Clock.systemUTC());
+        GatewayMetering metering = mock(GatewayMetering.class);
+        when(metering.findEmployee(any(), any())).thenAnswer(inv -> Optional.of(new GatewayAccount(
+                inv.getArgument(0), GatewayAccountType.EMPLOYEE, inv.getArgument(1),
+                GatewayQuotaMode.LIMITED, 100_000, 0, 0, 100_000, 0, null)));
+        grants.setMetering(metering);
+        return grants;
     }
 }

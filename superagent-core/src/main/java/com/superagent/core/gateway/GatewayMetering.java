@@ -46,8 +46,10 @@ public interface GatewayMetering {
     boolean beginSend(String attemptId);
 
     /**
-     * Records actual usage A (capped at R) and writes an idempotent settlement projection line.
-     * Allowed from SENDING or PENDING_RECONCILIATION (admin reconcile).
+     * Records full vendor usage A (never silently truncated). Employee pays {@code min(A,R)} from the
+     * freeze; {@code A>R} is debited from company {@link GatewayAccountType#RECON_RESERVE} in the same
+     * transaction. Writes an idempotent settlement projection with A.
+     * Allowed from SENDING or PENDING_RECONCILIATION (admin reconcile) — not RESERVED.
      */
     GatewayAttempt settle(String attemptId, long actualTokens);
 

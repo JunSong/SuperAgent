@@ -115,6 +115,34 @@ class GatewayMeteringTest {
                 assertThat(ledger.findEmployee("2026-11", "alice")).isEmpty());
     }
 
+    @Test
+    void actualUsageMustNotBeTruncatedToReservation() {
+        JdbcGatewayMetering ledger = newLedger();
+        String period = "2026-11";
+        ledger.putEmployee(period, "alice", 100);
+        ledger.putPool(period, com.superagent.core.gateway.GatewayAccountType.RECON_RESERVE, 1_000);
+
+        GatewayAttempt first = ledger.reserve(new GatewayMetering.ReserveRequest(
+                "req-a70", "turn-a", "run-a", "alice", "deepseek", "m", period, 60));
+        assertThat(ledger.beginSend(first.id())).isTrue();
+        GatewayAttempt settled = ledger.settle(first.id(), 70);
+        assertThat(settled.actualTokens()).isEqualTo(70);
+        assertThat(ledger.findEmployee(period, "alice")).hasValueSatisfying(a -> {
+            assertThat(a.available()).isEqualTo(40); // 100 - 60 employee charge
+            assertThat(a.reserved()).isZero();
+            assertThat(a.settled()).isEqualTo(60);
+        });
+        assertThat(ledger.findAccount(period, com.superagent.core.gateway.GatewayAccountType.RECON_RESERVE, ""))
+                .hasValueSatisfying(p -> assertThat(p.available()).isEqualTo(990));
+        assertThat(ledger.listProjections(period, 10)).singleElement()
+                .satisfies(p -> assertThat(p.actualTokens()).isEqualTo(70));
+
+        // Idempotent replay of the same full A
+        assertThat(ledger.settle(first.id(), 70).actualTokens()).isEqualTo(70);
+        assertThat(ledger.findAccount(period, com.superagent.core.gateway.GatewayAccountType.RECON_RESERVE, ""))
+                .hasValueSatisfying(p -> assertThat(p.available()).isEqualTo(990));
+    }
+
     private static JdbcGatewayMetering newLedger() {
         return new JdbcGatewayMetering(new JdbcTemplate(new DriverManagerDataSource(
                 "jdbc:h2:mem:gw-meter-" + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "")));
