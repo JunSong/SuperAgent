@@ -78,27 +78,42 @@ class ReservationEstimatorTest {
     }
 
     @Test
-    void chatIgnoresForeignMaxOutputTokensAndInjectsMaxTokens() {
-        // H1: Chat Completions must not under-reserve via a Responses-only field.
+    void chatIgnoresForeignMaxOutputTokensForDeclaredButClampsIt() {
+        // H1 + NEW-2: foreign field must not set R, and must not reach the vendor uncapped.
         byte[] body = "{\"model\":\"x\",\"max_output_tokens\":1,\"messages\":[]}".getBytes(StandardCharsets.UTF_8);
         ReservationEstimator.Prepared prepared =
                 ReservationEstimator.prepare(body, ModelRunGrants.PROTOCOL_OPENAI, "/v1/chat/completions");
         assertThat(prepared.outputCap()).isEqualTo(256);
         String out = ReservationEstimator.asUtf8(prepared.body());
         assertThat(out).contains("\"max_tokens\":256");
-        assertThat(out).contains("\"max_output_tokens\":1"); // foreign field left alone, ignored for R
+        assertThat(out).contains("\"max_output_tokens\":256");
     }
 
     @Test
-    void responsesIgnoresForeignMaxTokensAndUsesMaxOutputTokens() {
-        // H1 reverse: leftover max_tokens must not clamp Responses below the real cap.
+    void responsesDeclaredFromMaxOutputTokensAndClampsForeignMaxTokens() {
+        // H1 reverse + NEW-2: leftover max_tokens must not shrink R, but is clamped to output.
         byte[] body = "{\"model\":\"x\",\"max_tokens\":1,\"max_output_tokens\":8000}".getBytes(StandardCharsets.UTF_8);
         ReservationEstimator.Prepared prepared =
                 ReservationEstimator.prepare(body, ModelRunGrants.PROTOCOL_OPENAI, "/v1/responses");
         assertThat(prepared.outputCap()).isEqualTo(8000);
         String out = ReservationEstimator.asUtf8(prepared.body());
         assertThat(out).contains("\"max_output_tokens\":8000");
-        assertThat(out).contains("\"max_tokens\":1"); // foreign field ignored for declared/clamp
+        assertThat(out).contains("\"max_tokens\":8000");
+    }
+
+    @Test
+    void chatDualFieldCannotUnderReserveViaMaxCompletionTokens() {
+        // NEW-2: preferred=max_completion_tokens → R=input+1, but max_tokens also clamped to 1.
+        byte[] body = "{\"model\":\"x\",\"max_tokens\":100000,\"max_completion_tokens\":1}"
+                .getBytes(StandardCharsets.UTF_8);
+        ReservationEstimator.Prepared prepared =
+                ReservationEstimator.prepare(body, ModelRunGrants.PROTOCOL_OPENAI, "/v1/chat/completions");
+        assertThat(prepared.outputCap()).isEqualTo(1);
+        assertThat(prepared.reservedTokens()).isEqualTo((body.length + 3) / 4 + 1);
+        String out = ReservationEstimator.asUtf8(prepared.body());
+        assertThat(out).contains("\"max_completion_tokens\":1");
+        assertThat(out).contains("\"max_tokens\":1");
+        assertThat(out).doesNotContain("100000");
     }
 
     @Test

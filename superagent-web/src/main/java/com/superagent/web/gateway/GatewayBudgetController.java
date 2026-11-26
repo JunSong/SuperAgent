@@ -110,7 +110,8 @@ public class GatewayBudgetController {
             @RequestBody GatewayBudgetDtos.AllocateRequest body, Authentication auth) {
         requireBody(body);
         String period = periodOrCurrent(body.period());
-        ensureReconReserveAtLeast(period, policy.get().reconReserveTargetTokens());
+        // Period first-touch: top up RECON from UNALLOCATED (never mint) so A>R settle can succeed.
+        metering.fundReconReserveToTarget(period, policy.get().reconReserveTargetTokens());
         GatewayAccount allocated = metering.allocate(
                 body.operationId(), period, body.userId(), body.amount(), auth.getName());
         return ApiResponse.ok(toBalance(applyFloatAfterAllocate(period, body.userId(), body.floatAllowance(), allocated)));
@@ -215,9 +216,7 @@ public class GatewayBudgetController {
 
     @GetMapping(ApiPaths.GATEWAY_ADMIN + "/policy")
     public ApiResponse<GatewayBudgetDtos.Policy> getPolicy() {
-        GatewayPolicy current = policy.get();
-        ensureReconReserveAtLeast(GatewayPeriods.current(clock), current.reconReserveTargetTokens());
-        return ApiResponse.ok(toPolicy(current));
+        return ApiResponse.ok(toPolicy(policy.get()));
     }
 
     @PutMapping(ApiPaths.GATEWAY_ADMIN + "/policy")
@@ -242,8 +241,8 @@ public class GatewayBudgetController {
         String period = GatewayPeriods.current(clock);
         // Keep company float pool usable when a default F is configured (debit only if the pool row exists).
         ensureFloatPoolAtLeast(period, updated.defaultFloatAllowance());
-        // Seed RECON so A>R settle can debit overage instead of parking every freeze as PENDING.
-        ensureReconReserveAtLeast(period, updated.reconReserveTargetTokens());
+        // Transfer UNALLOCATED → RECON toward target (ledgered; never REPLACE/mint).
+        metering.fundReconReserveToTarget(period, updated.reconReserveTargetTokens());
         return ApiResponse.ok(toPolicy(updated));
     }
 
@@ -279,19 +278,6 @@ public class GatewayBudgetController {
                 .orElse(0L);
         if (current < minAvailable) {
             metering.putPool(period, GatewayAccountType.FLOAT_POOL, minAvailable);
-        }
-    }
-
-    /** Seed or raise RECON_RESERVE to the policy target so overage settle stays on the C1 success path. */
-    private void ensureReconReserveAtLeast(String period, long minAvailable) {
-        if (minAvailable <= 0) {
-            return;
-        }
-        long current = metering.findAccount(period, GatewayAccountType.RECON_RESERVE, "")
-                .map(GatewayAccount::available)
-                .orElse(0L);
-        if (current < minAvailable) {
-            metering.putPool(period, GatewayAccountType.RECON_RESERVE, minAvailable);
         }
     }
 

@@ -26,6 +26,15 @@ public interface GatewayMetering {
     /** Company pool (UNALLOCATED / FLOAT_POOL / RECON_RESERVE / SYSTEM). Owner is empty for company pools. */
     void putPool(String period, GatewayAccountType type, long available);
 
+    /**
+     * Top up {@link GatewayAccountType#RECON_RESERVE} toward {@code target} by transferring from
+     * {@link GatewayAccountType#UNALLOCATED}. Never mints: moves {@code min(deficit, unallocated)},
+     * writes ledger lines, and is safe to retry (no REPLACE). Returns tokens actually moved.
+     */
+    default long fundReconReserveToTarget(String period, long target) {
+        return 0L;
+    }
+
     Optional<GatewayAccount> findEmployee(String period, String userId);
 
     Optional<GatewayAccount> findAccount(String period, GatewayAccountType type, String ownerId);

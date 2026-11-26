@@ -12,9 +12,10 @@ import java.util.Locale;
  * Conservative R before hard tokenizer evidence (#34 §4): body bytes/4 as input upper bound
  * plus a capped slice of the request's protocol-bound output cap (or a floor when omitted).
  *
- * <p>Rewrites only the single protocol-appropriate output field so the upstream cannot emit more
- * than reserved — never raises a caller-declared cap, and never treats foreign protocol fields as
- * the declared cap (H1). Non-JSON / non-object bodies are rejected with 0 outbound (H2).
+ * <p>{@code declared} comes only from the protocol-appropriate field (H1). Every known output-cap
+ * field is then clamped to that same {@code output} so dual-field requests cannot under-reserve
+ * while a foreign field still reaches the vendor (NEW-2). Non-JSON / non-object bodies are
+ * rejected with 0 outbound (H2).
  */
 final class ReservationEstimator {
 
@@ -23,6 +24,7 @@ final class ReservationEstimator {
     private static final long OUTPUT_FLOOR = 256;
     /** Practical reserve ceiling for declared output caps. */
     static final long OUTPUT_RESERVE_CAP = 32_768;
+    private static final String[] OUTPUT_FIELDS = {"max_tokens", "max_output_tokens", "max_completion_tokens"};
 
     record Prepared(long reservedTokens, byte[] body, long outputCap) {
     }
@@ -62,7 +64,7 @@ final class ReservationEstimator {
         String field = preferredOutputField(protocol, path, obj);
         long declared = positiveNumber(obj.get(field));
         long output = declared > 0 ? Math.min(OUTPUT_RESERVE_CAP, declared) : OUTPUT_FLOOR;
-        // Never raise a caller-declared cap (P2); only clamp down to the reserve ceiling / inject floor.
+        // Never raise a caller-declared cap (P2); clamp every known output field to the same ceiling.
         boolean changed = applyOutputCap(obj, field, output);
         byte[] outbound = changed ? writeBytes(obj) : body;
         long input = Math.max(1, (body.length + 3) / 4);
@@ -70,16 +72,28 @@ final class ReservationEstimator {
     }
 
     /**
-     * Clamp or inject only the protocol-bound field. Foreign output-cap fields are ignored so a
-     * Chat Completions call cannot under-reserve via {@code max_output_tokens}, etc.
+     * Set the protocol field to {@code output}, and clamp every other known output-cap field that is
+     * already present so a dual-field body cannot under-reserve while a large foreign cap reaches
+     * the vendor.
      */
-    private static boolean applyOutputCap(ObjectNode obj, String field, long output) {
-        JsonNode n = obj.get(field);
-        if (n != null && n.isNumber() && n.asLong() == output) {
-            return false;
+    private static boolean applyOutputCap(ObjectNode obj, String preferred, long output) {
+        boolean changed = false;
+        JsonNode preferredNode = obj.get(preferred);
+        if (preferredNode == null || !preferredNode.isNumber() || preferredNode.asLong() != output) {
+            obj.put(preferred, output);
+            changed = true;
         }
-        obj.put(field, output);
-        return true;
+        for (String f : OUTPUT_FIELDS) {
+            if (f.equals(preferred) || !obj.has(f)) {
+                continue;
+            }
+            JsonNode n = obj.get(f);
+            if (!n.isNumber() || n.asLong() != output) {
+                obj.put(f, output);
+                changed = true;
+            }
+        }
+        return changed;
     }
 
     /**

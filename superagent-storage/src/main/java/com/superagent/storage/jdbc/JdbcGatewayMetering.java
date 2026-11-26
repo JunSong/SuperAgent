@@ -226,6 +226,53 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
     }
 
     @Override
+    public long fundReconReserveToTarget(String period, long target) {
+        if (period == null || period.isBlank()) {
+            throw new IllegalArgumentException("period is required");
+        }
+        if (target <= 0) {
+            return 0L;
+        }
+        Long moved = tx.execute(status -> {
+            String company = TenantSchema.company();
+            ensurePoolRow(company, period, GatewayAccountType.RECON_RESERVE);
+            ensurePoolRow(company, period, GatewayAccountType.UNALLOCATED);
+            long reconAvail = lockPoolAvailable(company, period, GatewayAccountType.RECON_RESERVE);
+            long unallocAvail = lockPoolAvailable(company, period, GatewayAccountType.UNALLOCATED);
+            long need = target - reconAvail;
+            if (need <= 0) {
+                return 0L;
+            }
+            long move = Math.min(need, unallocAvail);
+            if (move <= 0) {
+                return 0L;
+            }
+            int debit = jdbc.update("""
+                    UPDATE gateway_account SET available_tokens = available_tokens - ?
+                    WHERE company_id = ? AND period = ? AND account_type = ? AND owner_id = ?
+                      AND available_tokens >= ?
+                    """,
+                    move, company, period, GatewayAccountType.UNALLOCATED.name(), POOL_OWNER, move);
+            int credit = jdbc.update("""
+                    UPDATE gateway_account SET available_tokens = available_tokens + ?
+                    WHERE company_id = ? AND period = ? AND account_type = ? AND owner_id = ?
+                    """,
+                    move, company, period, GatewayAccountType.RECON_RESERVE.name(), POOL_OWNER);
+            if (debit != 1 || credit != 1) {
+                throw new IllegalStateException("RECON fund transfer failed");
+            }
+            String operationId = "recon-fund:" + period + ":" + UUID.randomUUID();
+            String digest = digest("recon-fund", period, move);
+            writeLedger(company, operationId, 1, period, GatewayAccountType.UNALLOCATED, POOL_OWNER,
+                    -move, 0, 0, "RECON_FUND_OUT", null, digest);
+            writeLedger(company, operationId, 2, period, GatewayAccountType.RECON_RESERVE, POOL_OWNER,
+                    move, 0, 0, "RECON_FUND_IN", null, digest);
+            return move;
+        });
+        return moved == null ? 0L : moved;
+    }
+
+    @Override
     public Optional<GatewayAccount> findEmployee(String period, String userId) {
         return findAccount(period, GatewayAccountType.EMPLOYEE, userId);
     }
@@ -307,7 +354,8 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
                                 "上浮资格已被其他轮次占用（QUOTA_EXHAUSTED）");
                     }
                     writeLedger(company, "float-claim:" + request.turnId(), 1, request.period(),
-                            request.payerUserId(), f, 0, 0, "FLOAT_CLAIM", null, digest("float", request.turnId(), f));
+                            GatewayAccountType.EMPLOYEE, request.payerUserId(), f, 0, 0, "FLOAT_CLAIM", null,
+                            digest("float", request.turnId(), f));
                     isFloatTurn = true;
                     // pull F from FLOAT_POOL when present
                     debitPoolIfPresent(company, request.period(), GatewayAccountType.FLOAT_POOL, f);
@@ -349,7 +397,8 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
                 status.setRollbackOnly();
                 throw new IllegalStateException("duplicate gateway request_id: " + request.requestId(), e);
             }
-            writeLedger(company, "reserve:" + attemptId, 1, request.period(), request.payerUserId(),
+            writeLedger(company, "reserve:" + attemptId, 1, request.period(),
+                    GatewayAccountType.EMPLOYEE, request.payerUserId(),
                     -r, r, 0, "RESERVE", attemptId, null);
             return requireAttempt(company, attemptId);
         });
@@ -427,7 +476,8 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
                     WHERE company_id = ? AND id = ?
                     """,
                     GatewayAttemptStatus.SETTLED.name(), a, company, attemptId);
-            writeLedger(company, "settle:" + attemptId, 1, current.period(), current.payerUserId(),
+            writeLedger(company, "settle:" + attemptId, 1, current.period(),
+                    GatewayAccountType.EMPLOYEE, current.payerUserId(),
                     refund, -r, employeeCharge, "SETTLE", attemptId, null);
             writeSettlementProjection(company, current, a);
             return requireAttempt(company, attemptId);
@@ -510,7 +560,8 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
             if (released != 1) {
                 throw new IllegalStateException("cancel released 0 account rows for attempt " + attemptId);
             }
-            writeLedger(company, "cancel:" + attemptId, 1, current.period(), current.payerUserId(),
+            writeLedger(company, "cancel:" + attemptId, 1, current.period(),
+                    GatewayAccountType.EMPLOYEE, current.payerUserId(),
                     r, -r, 0, "CANCEL", attemptId, null);
         });
     }
@@ -532,8 +583,10 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
                     WHERE company_id = ? AND period = ? AND account_type = ? AND owner_id = ?
                     """,
                     amount, amount, company, period, GatewayAccountType.EMPLOYEE.name(), toUserId);
-            writeLedger(company, operationId, 1, period, POOL_OWNER, -amount, 0, 0, "ALLOCATE_OUT", null, digest);
-            writeLedger(company, operationId, 2, period, toUserId, amount, 0, 0, "ALLOCATE_IN", null, digest);
+            writeLedger(company, operationId, 1, period, GatewayAccountType.UNALLOCATED, POOL_OWNER,
+                    -amount, 0, 0, "ALLOCATE_OUT", null, digest);
+            writeLedger(company, operationId, 2, period, GatewayAccountType.EMPLOYEE, toUserId,
+                    amount, 0, 0, "ALLOCATE_IN", null, digest);
             return findEmployee(period, toUserId).orElseThrow();
         });
     }
@@ -603,8 +656,10 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
                     WHERE company_id = ? AND period = ? AND account_type = ? AND owner_id = ?
                     """,
                     amount, company, period, GatewayAccountType.UNALLOCATED.name(), POOL_OWNER);
-            writeLedger(company, operationId, 1, period, fromUserId, -amount, 0, 0, "RECLAIM_OUT", null, digest);
-            writeLedger(company, operationId, 2, period, POOL_OWNER, amount, 0, 0, "RECLAIM_IN", null, digest);
+            writeLedger(company, operationId, 1, period, GatewayAccountType.EMPLOYEE, fromUserId,
+                    -amount, 0, 0, "RECLAIM_OUT", null, digest);
+            writeLedger(company, operationId, 2, period, GatewayAccountType.UNALLOCATED, POOL_OWNER,
+                    amount, 0, 0, "RECLAIM_IN", null, digest);
             return findEmployee(period, fromUserId).orElseThrow();
         });
     }
@@ -641,8 +696,10 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
                     WHERE company_id = ? AND period = ? AND account_type = ? AND owner_id = ?
                     """,
                     amount, amount, company, period, GatewayAccountType.EMPLOYEE.name(), toUserId);
-            writeLedger(company, operationId, 1, period, fromUserId, -amount, 0, 0, "TRANSFER_OUT", null, digest);
-            writeLedger(company, operationId, 2, period, toUserId, amount, 0, 0, "TRANSFER_IN", null, digest);
+            writeLedger(company, operationId, 1, period, GatewayAccountType.EMPLOYEE, fromUserId,
+                    -amount, 0, 0, "TRANSFER_OUT", null, digest);
+            writeLedger(company, operationId, 2, period, GatewayAccountType.EMPLOYEE, toUserId,
+                    amount, 0, 0, "TRANSFER_IN", null, digest);
         });
     }
 
@@ -811,7 +868,7 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
         if (n == 0) {
             return false;
         }
-        writeLedger(company, "overage:" + attemptId, 1, period, POOL_OWNER,
+        writeLedger(company, "overage:" + attemptId, 1, period, GatewayAccountType.RECON_RESERVE, POOL_OWNER,
                 -overage, 0, 0, "OVERAGE", attemptId, digest("overage", attemptId, overage));
         return true;
     }
@@ -895,7 +952,18 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
         throw new GatewayConflictException("operation_id 已使用且参数不同");
     }
 
-    private void writeLedger(String company, String operationId, int entryNo, String period, String ownerId,
+    private long lockPoolAvailable(String company, String period, GatewayAccountType type) {
+        Long avail = jdbc.queryForObject("""
+                SELECT available_tokens FROM gateway_account
+                WHERE company_id = ? AND period = ? AND account_type = ? AND owner_id = ?
+                FOR UPDATE
+                """,
+                Long.class, company, period, type.name(), POOL_OWNER);
+        return avail == null ? 0L : avail;
+    }
+
+    private void writeLedger(String company, String operationId, int entryNo, String period,
+                             GatewayAccountType accountType, String ownerId,
                              long dAvailable, long dReserved, long dSettled, String reason, String attemptId,
                              String paramDigest) {
         jdbc.update("""
@@ -903,9 +971,7 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
                   delta_available, delta_reserved, delta_settled, reason, attempt_id, param_digest)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                company, operationId, entryNo, period,
-                ownerId == null || ownerId.isEmpty() ? GatewayAccountType.UNALLOCATED.name()
-                        : GatewayAccountType.EMPLOYEE.name(),
+                company, operationId, entryNo, period, accountType.name(),
                 ownerId == null ? POOL_OWNER : ownerId,
                 dAvailable, dReserved, dSettled, reason, attemptId, paramDigest);
     }

@@ -197,6 +197,42 @@ class GatewayMeteringTest {
     }
 
     @Test
+    void fundReconFromUnallocatedWritesLedgerAndNeverMints() {
+        JdbcGatewayMetering ledger = newLedger();
+        String period = "2026-11";
+        ledger.putPool(period, GatewayAccountType.UNALLOCATED, 500_000);
+        assertThat(ledger.fundReconReserveToTarget(period, 500_000)).isEqualTo(500_000);
+        assertThat(ledger.findAccount(period, GatewayAccountType.RECON_RESERVE, ""))
+                .hasValueSatisfying(a -> assertThat(a.available()).isEqualTo(500_000));
+        assertThat(ledger.findAccount(period, GatewayAccountType.UNALLOCATED, ""))
+                .hasValueSatisfying(a -> assertThat(a.available()).isZero());
+        assertThat(ledger.listLedger(period, 10)).anySatisfy(e -> {
+            assertThat(e.reason()).isEqualTo("RECON_FUND_IN");
+            assertThat(e.accountType()).isEqualTo(GatewayAccountType.RECON_RESERVE);
+            assertThat(e.deltaAvailable()).isEqualTo(500_000);
+        });
+
+        // Overage drains RECON; a second fund without UNALLOCATED must not mint back to target.
+        ledger.putEmployee(period, "alice", 100);
+        GatewayAttempt first = ledger.reserve(new GatewayMetering.ReserveRequest(
+                "req-fund", "turn-fund", "run-fund", "alice", "deepseek", "m", period, 60));
+        assertThat(ledger.beginSend(first.id())).isTrue();
+        assertThat(ledger.settle(first.id(), 70).status()).isEqualTo(GatewayAttemptStatus.SETTLED);
+        assertThat(ledger.findAccount(period, GatewayAccountType.RECON_RESERVE, ""))
+                .hasValueSatisfying(a -> assertThat(a.available()).isEqualTo(499_990));
+
+        assertThat(ledger.fundReconReserveToTarget(period, 500_000)).isZero();
+        assertThat(ledger.findAccount(period, GatewayAccountType.RECON_RESERVE, ""))
+                .hasValueSatisfying(a -> assertThat(a.available()).isEqualTo(499_990));
+
+        // Partial top-up from remaining UNALLOCATED only.
+        ledger.putPool(period, GatewayAccountType.UNALLOCATED, 5);
+        assertThat(ledger.fundReconReserveToTarget(period, 500_000)).isEqualTo(5);
+        assertThat(ledger.findAccount(period, GatewayAccountType.RECON_RESERVE, ""))
+                .hasValueSatisfying(a -> assertThat(a.available()).isEqualTo(499_995));
+    }
+
+    @Test
     void cancelledAttemptMustNotUnlockFloatForSameTurnId() {
         JdbcGatewayMetering ledger = newLedger();
         String period = "2026-11";
