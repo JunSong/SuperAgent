@@ -34,9 +34,10 @@ public record GatewayPolicy(
     public static final GatewayReportMode DEFAULT_REPORT_MODE = GatewayReportMode.LEGACY;
 
     /**
-     * No CLI has a G0-proven tokenizer/count path yet — request-level input bounds stay heuristic.
+     * True when {@link InputCounterCatalog} lists at least one {@code hardEligible} CLI
+     * (currently DeepSeek Anthropic {@code count_tokens}).
      */
-    public static final boolean HARD_INPUT_BOUND_AVAILABLE = false;
+    public static final boolean HARD_INPUT_BOUND_AVAILABLE = InputCounterCatalog.hardInputBoundAvailable();
 
     public GatewayPolicy {
         managedClis = managedClis == null ? List.of() : List.copyOf(managedClis);
@@ -54,16 +55,15 @@ public record GatewayPolicy(
                 List.of());
     }
 
-    /** Effective input-bound mode for a managed CLI (always heuristic until a proven estimator ships). */
+    /** Effective input-bound mode for a managed CLI. */
     public GatewayInputBoundMode inputBoundModeFor(String cli) {
-        if (!HARD_INPUT_BOUND_AVAILABLE) {
-            return GatewayInputBoundMode.HEURISTIC;
-        }
         if (cli == null || cli.isBlank()) {
             return GatewayInputBoundMode.HEURISTIC;
         }
         String key = cli.strip();
-        boolean hard = hardQuotaClis.stream().anyMatch(c -> c.equalsIgnoreCase(key));
+        boolean hard = HARD_INPUT_BOUND_AVAILABLE
+                && hardQuotaClis.stream().anyMatch(c -> c.equalsIgnoreCase(key))
+                && InputCounterCatalog.find(key).map(InputCounterCatalog.Strategy::hardEligible).orElse(false);
         return hard ? GatewayInputBoundMode.PROVEN : GatewayInputBoundMode.HEURISTIC;
     }
 }

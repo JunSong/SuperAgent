@@ -5,14 +5,16 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.superagent.core.error.ForbiddenException;
 import com.superagent.core.gateway.GatewayInputBoundMode;
+import com.superagent.core.gateway.InputCountSource;
+import com.superagent.gateway.count.InputCountResult;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 
 /**
- * Soft reservation R (#34 option C): heuristic input ({@code body bytes/4}) plus a capped slice of
- * the protocol-bound output cap. This is {@link GatewayInputBoundMode#HEURISTIC} until a G0-proven
- * tokenizer/count path exists — monthly B/F still applies; do not promise hard vendor spend caps.
+ * Builds reservation R = input estimate + clamped output cap. Input comes from
+ * {@link InputCountResult} (LiteLLM-aligned A/C); when omitted, falls back to heuristic
+ * {@code body bytes/4}.
  *
  * <p>{@code declared} comes only from the protocol-appropriate field (H1). Every known output-cap
  * field is then clamped to that same {@code output} so dual-field requests cannot under-reserve
@@ -28,7 +30,11 @@ final class ReservationEstimator {
     static final long OUTPUT_RESERVE_CAP = 32_768;
     private static final String[] OUTPUT_FIELDS = {"max_tokens", "max_output_tokens", "max_completion_tokens"};
 
-    record Prepared(long reservedTokens, byte[] body, long outputCap, GatewayInputBoundMode inputBoundMode) {
+    record Prepared(long reservedTokens, byte[] body, long outputCap, GatewayInputBoundMode inputBoundMode,
+                    InputCountSource inputCountSource) {
+        Prepared(long reservedTokens, byte[] body, long outputCap, GatewayInputBoundMode inputBoundMode) {
+            this(reservedTokens, body, outputCap, inputBoundMode, InputCountSource.HEURISTIC);
+        }
     }
 
     private ReservationEstimator() {
@@ -47,6 +53,14 @@ final class ReservationEstimator {
      * @param path     normalized gateway suffix (e.g. {@code /v1/messages}, {@code /v1/responses})
      */
     static Prepared prepare(byte[] body, String protocol, String path) {
+        return prepare(body, protocol, path, null, GatewayInputBoundMode.HEURISTIC);
+    }
+
+    record Clamped(byte[] body, long outputCap) {
+    }
+
+    /** Output-cap clamp only (no reservation math). */
+    static Clamped clamp(byte[] body, String protocol, String path) {
         if (body == null || body.length == 0) {
             throw new ForbiddenException("受管网关仅接受 JSON 对象请求体");
         }
@@ -66,12 +80,24 @@ final class ReservationEstimator {
         String field = preferredOutputField(protocol, path, obj);
         long declared = positiveNumber(obj.get(field));
         long output = declared > 0 ? Math.min(OUTPUT_RESERVE_CAP, declared) : OUTPUT_FLOOR;
-        // Never raise a caller-declared cap (P2); clamp every known output field to the same ceiling.
         boolean changed = applyOutputCap(obj, field, output);
         byte[] outbound = changed ? writeBytes(obj) : body;
-        long input = Math.max(1, (body.length + 3) / 4);
-        // Proven input bounds are not available in this build — always heuristic (option C).
-        return new Prepared(input + output, outbound, output, GatewayInputBoundMode.HEURISTIC);
+        return new Clamped(outbound, output);
+    }
+
+    static Prepared prepare(byte[] body, String protocol, String path, InputCountResult inputCount,
+                            GatewayInputBoundMode boundMode) {
+        Clamped clamped = clamp(body, protocol, path);
+        InputCountResult counted = inputCount != null
+                ? inputCount
+                : InputCountResult.heuristic(Math.max(1, (body.length + 3) / 4));
+        GatewayInputBoundMode mode = boundMode == null ? GatewayInputBoundMode.HEURISTIC : boundMode;
+        // Prefer honest labeling: if caller asked PROVEN but count fell back, keep HEURISTIC.
+        if (mode == GatewayInputBoundMode.PROVEN && counted.source() != InputCountSource.PROVIDER) {
+            mode = GatewayInputBoundMode.HEURISTIC;
+        }
+        return new Prepared(counted.inputTokens() + clamped.outputCap(), clamped.body(), clamped.outputCap(),
+                mode, counted.source());
     }
 
     /**

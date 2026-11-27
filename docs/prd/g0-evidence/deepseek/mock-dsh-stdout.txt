@@ -1,0 +1,7 @@
+{"type":"session","sessionId":"session-b320c7b8-63b6-415e-9faf-04314b87f8b2","cwd":"/private/var/folders/pm/sghfnnds2gq0sr93dqg0bj440000gn/T/g0-dsh-66gbmsgz/ws"}
+{"type":"status","phase":"turn_start","turn":1}
+{"type":"status","phase":"step_start","turn":1,"step":1}
+{"type":"text","text":"g0-ok"}
+{"type":"status","phase":"step_end","turn":1,"step":1,"usage":{"inputTokens":12,"outputTokens":3,"totalTokens":15}}
+{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"completed"}}
+{"type":"final","sessionId":"session-b320c7b8-63b6-415e-9faf-04314b87f8b2","reason":{"kind":"completed"},"text":"g0-ok"}

@@ -1,0 +1,23 @@
+{
+  "http_status": 200,
+  "ok": true,
+  "usage": {
+    "input_tokens": 10238,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "output_tokens": 5,
+    "service_tier": "standard",
+    "output_tokens_details": {
+      "thinking_tokens": 0
+    }
+  },
+  "vendor_input": 10238,
+  "body_bytes": 119678,
+  "heuristic_input": 29920,
+  "under_estimate": false,
+  "ratio": 2.922,
+  "body_sha256_12": "ca7dd77a0b74",
+  "model": "deepseek-chat",
+  "has_tools": true,
+  "message_count": 1
+}

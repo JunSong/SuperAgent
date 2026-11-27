@@ -29,7 +29,7 @@ class GatewayPolicyServiceTest {
             assertThat(svc.get().managedClis()).isEmpty();
             assertThat(svc.get().hardQuotaClis()).isEmpty();
             assertThat(svc.get().inputBoundModeFor("deepseek")).isEqualTo(GatewayInputBoundMode.HEURISTIC);
-            assertThat(GatewayPolicy.HARD_INPUT_BOUND_AVAILABLE).isFalse();
+            assertThat(GatewayPolicy.HARD_INPUT_BOUND_AVAILABLE).isTrue();
         });
     }
 
@@ -84,13 +84,16 @@ class GatewayPolicyServiceTest {
     }
 
     @Test
-    void rejectsHardQuotaClisUntilProvenEstimatorExists() {
+    void allowsHardQuotaClisOnlyForHardEligible() {
         GatewayPolicyService svc = new GatewayPolicyService(new MemStore());
-        TenantContext.run("co1", () ->
-                assertThatThrownBy(() -> svc.update(null, null, null, null, null, null, List.of("deepseek")))
-                        .isInstanceOf(IllegalArgumentException.class)
-                        .hasMessageContaining("hardQuotaClis")
-                        .hasMessageContaining("G0"));
+        TenantContext.run("co1", () -> {
+            GatewayPolicy withDeepseek = svc.update(null, null, null, null, null, null, List.of("deepseek"));
+            assertThat(withDeepseek.hardQuotaClis()).containsExactly("deepseek");
+            assertThat(withDeepseek.inputBoundModeFor("deepseek")).isEqualTo(GatewayInputBoundMode.PROVEN);
+            assertThatThrownBy(() -> svc.update(null, null, null, null, null, null, List.of("grok")))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("hard-eligible");
+        });
     }
 
     /** Keeps blank values so "saved empty managed-clis" differs from "never set". */

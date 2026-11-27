@@ -1,0 +1,1140 @@
+{
+  "policy": "A (vendor count) primary, C (bytes/4) fallback — measurement only; code not switched",
+  "company_id": "demo",
+  "providers": [
+    {
+      "provider": "deepseek",
+      "credential_status": "ok",
+      "stored_base": "https://api.deepseek.com/chat/completions",
+      "key_sha256_12": "a8d714d51a62",
+      "origins_tried": [
+        "https://api.deepseek.com"
+      ],
+      "count_attempts": [
+        {
+          "model": "deepseek-flash",
+          "url": "https://api.deepseek.com/anthropic/v1/messages/count_tokens",
+          "status": 200,
+          "ok": true,
+          "elapsed_s": 0.138,
+          "input_tokens": 295,
+          "error_preview": null
+        },
+        {
+          "model": "deepseek-flash",
+          "url": "https://api.deepseek.com/v1/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.343,
+          "input_tokens": null,
+          "error_preview": "{\"error\":{\"message\":\"Not Found (request_id: 60ac0231-c2f2-49d6-aa0d-8da3dce9d9be)\",\"type\":\"not_found_error\",\"param\":null,\"code\":\"invalid_request_error\"}}"
+        }
+      ],
+      "bill_attempts": [
+        {
+          "model": "deepseek-flash",
+          "label": "anthropic_messages",
+          "url": "https://api.deepseek.com/anthropic/v1/messages",
+          "status": 200,
+          "ok": true,
+          "elapsed_s": 0.48,
+          "billed_input": 295,
+          "usage": {
+            "input_tokens": 295,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 16,
+            "service_tier": "standard",
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            }
+          },
+          "error_preview": null,
+          "heuristic_on_bill_body": 84
+        }
+      ],
+      "best_count": {
+        "model": "deepseek-flash",
+        "url": "https://api.deepseek.com/anthropic/v1/messages/count_tokens",
+        "status": 200,
+        "ok": true,
+        "elapsed_s": 0.138,
+        "input_tokens": 295,
+        "error_preview": null
+      },
+      "best_bill": {
+        "model": "deepseek-flash",
+        "label": "anthropic_messages",
+        "url": "https://api.deepseek.com/anthropic/v1/messages",
+        "status": 200,
+        "ok": true,
+        "elapsed_s": 0.48,
+        "billed_input": 295,
+        "usage": {
+          "input_tokens": 295,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "output_tokens": 16,
+          "service_tier": "standard",
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          }
+        },
+        "error_preview": null,
+        "heuristic_on_bill_body": 84
+      },
+      "alignment": {
+        "count": 295,
+        "billed_input": 295,
+        "count_minus_bill": 0,
+        "count_ge_bill": true,
+        "heuristic": 84,
+        "heuristic_ge_bill": false
+      },
+      "plan_A_usable": true,
+      "fallback_C_note": "bytes/4 heuristic remains available as soft fallback",
+      "credential_id": "958bc8cf-349f-4f2b-a247-efd0f216e3fd"
+    },
+    {
+      "provider": "grok",
+      "credential_status": "ok",
+      "stored_base": "https://api.x.ai/v1",
+      "key_sha256_12": "3dd74b7bc030",
+      "origins_tried": [
+        "https://api.x.ai/v1"
+      ],
+      "count_attempts": [
+        {
+          "model": "grok-4-1-fast-non-reasoning",
+          "url": "https://api.x.ai/v1/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.862,
+          "input_tokens": null,
+          "error_preview": "{\"error\":{\"code\":404,\"message\":\"The requested resource was not found. Please check the URL and try again. Documentation is available at https://docs.x.ai/\"}}"
+        },
+        {
+          "model": "grok-4-1-fast-non-reasoning",
+          "url": "https://api.x.ai/v1/chat/completions/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 1.045,
+          "input_tokens": null,
+          "error_preview": "{\"error\":{\"code\":404,\"message\":\"The requested resource was not found. Please check the URL and try again. Documentation is available at https://docs.x.ai/\"}}"
+        },
+        {
+          "model": "grok-4-1-fast-non-reasoning",
+          "url": "https://api.x.ai/v1/tokenize/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 5.129,
+          "input_tokens": null,
+          "error_preview": "{\"error\":{\"code\":404,\"message\":\"The requested resource was not found. Please check the URL and try again. Documentation is available at https://docs.x.ai/\"}}"
+        },
+        {
+          "model": "grok-4.20-0309-non-reasoning",
+          "url": "https://api.x.ai/v1/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.998,
+          "input_tokens": null,
+          "error_preview": "{\"error\":{\"code\":404,\"message\":\"The requested resource was not found. Please check the URL and try again. Documentation is available at https://docs.x.ai/\"}}"
+        },
+        {
+          "model": "grok-4.20-0309-non-reasoning",
+          "url": "https://api.x.ai/v1/chat/completions/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.877,
+          "input_tokens": null,
+          "error_preview": "{\"error\":{\"code\":404,\"message\":\"The requested resource was not found. Please check the URL and try again. Documentation is available at https://docs.x.ai/\"}}"
+        },
+        {
+          "model": "grok-4.20-0309-non-reasoning",
+          "url": "https://api.x.ai/v1/tokenize/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.822,
+          "input_tokens": null,
+          "error_preview": "{\"error\":{\"code\":404,\"message\":\"The requested resource was not found. Please check the URL and try again. Documentation is available at https://docs.x.ai/\"}}"
+        },
+        {
+          "model": "grok-3-mini",
+          "url": "https://api.x.ai/v1/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.922,
+          "input_tokens": null,
+          "error_preview": "{\"error\":{\"code\":404,\"message\":\"The requested resource was not found. Please check the URL and try again. Documentation is available at https://docs.x.ai/\"}}"
+        },
+        {
+          "model": "grok-3-mini",
+          "url": "https://api.x.ai/v1/chat/completions/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.925,
+          "input_tokens": null,
+          "error_preview": "{\"error\":{\"code\":404,\"message\":\"The requested resource was not found. Please check the URL and try again. Documentation is available at https://docs.x.ai/\"}}"
+        },
+        {
+          "model": "grok-3-mini",
+          "url": "https://api.x.ai/v1/tokenize/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 9.321,
+          "input_tokens": null,
+          "error_preview": "{\"error\":{\"code\":404,\"message\":\"The requested resource was not found. Please check the URL and try again. Documentation is available at https://docs.x.ai/\"}}"
+        },
+        {
+          "model": "grok-2-latest",
+          "url": "https://api.x.ai/v1/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.945,
+          "input_tokens": null,
+          "error_preview": "{\"error\":{\"code\":404,\"message\":\"The requested resource was not found. Please check the URL and try again. Documentation is available at https://docs.x.ai/\"}}"
+        },
+        {
+          "model": "grok-2-latest",
+          "url": "https://api.x.ai/v1/chat/completions/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.808,
+          "input_tokens": null,
+          "error_preview": "{\"error\":{\"code\":404,\"message\":\"The requested resource was not found. Please check the URL and try again. Documentation is available at https://docs.x.ai/\"}}"
+        },
+        {
+          "model": "grok-2-latest",
+          "url": "https://api.x.ai/v1/tokenize/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 10.94,
+          "input_tokens": null,
+          "error_preview": "{\"error\":{\"code\":404,\"message\":\"The requested resource was not found. Please check the URL and try again. Documentation is available at https://docs.x.ai/\"}}"
+        }
+      ],
+      "bill_attempts": [
+        {
+          "model": "grok-4-1-fast-non-reasoning",
+          "label": "openai_chat",
+          "url": "https://api.x.ai/v1/chat/completions",
+          "status": 200,
+          "ok": true,
+          "elapsed_s": 13.267,
+          "billed_input": 269,
+          "usage": {
+            "prompt_tokens": 269,
+            "completion_tokens": 1,
+            "total_tokens": 270,
+            "prompt_tokens_details": {
+              "text_tokens": 269,
+              "audio_tokens": 0,
+              "image_tokens": 0,
+              "cached_tokens": 128
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 0,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            },
+            "num_sources_used": 0,
+            "cost_in_usd_ticks": 2043500
+          },
+          "error_preview": null,
+          "heuristic_on_bill_body": 96
+        },
+        {
+          "model": "grok-4.20-0309-non-reasoning",
+          "label": "openai_chat",
+          "url": "https://api.x.ai/v1/chat/completions",
+          "status": 200,
+          "ok": true,
+          "elapsed_s": 1.812,
+          "billed_input": 269,
+          "usage": {
+            "prompt_tokens": 269,
+            "completion_tokens": 1,
+            "total_tokens": 270,
+            "prompt_tokens_details": {
+              "text_tokens": 269,
+              "audio_tokens": 0,
+              "image_tokens": 0,
+              "cached_tokens": 128
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 0,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            },
+            "num_sources_used": 0,
+            "cost_in_usd_ticks": 2043500
+          },
+          "error_preview": null,
+          "heuristic_on_bill_body": 96
+        },
+        {
+          "model": "grok-3-mini",
+          "label": "openai_chat",
+          "url": "https://api.x.ai/v1/chat/completions",
+          "status": 200,
+          "ok": true,
+          "elapsed_s": 2.51,
+          "billed_input": 277,
+          "usage": {
+            "prompt_tokens": 277,
+            "completion_tokens": 1,
+            "total_tokens": 410,
+            "prompt_tokens_details": {
+              "text_tokens": 277,
+              "audio_tokens": 0,
+              "image_tokens": 0,
+              "cached_tokens": 128
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 132,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            },
+            "num_sources_used": 0,
+            "cost_in_usd_ticks": 5443500
+          },
+          "error_preview": null,
+          "heuristic_on_bill_body": 92
+        },
+        {
+          "model": "grok-2-latest",
+          "label": "openai_chat",
+          "url": "https://api.x.ai/v1/chat/completions",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.883,
+          "billed_input": null,
+          "usage": null,
+          "error_preview": "{\"code\":\"not-found\",\"error\":\"The model grok-2-latest does not exist or your team c05f3ddb-2bb7-41d5-a677-6a52a2925f3d does not have access to it. If you believe this is a mistake, please contact support and quote your team ID and the model name.\"}",
+          "heuristic_on_bill_body": 93
+        }
+      ],
+      "best_count": null,
+      "best_bill": {
+        "model": "grok-3-mini",
+        "label": "openai_chat",
+        "url": "https://api.x.ai/v1/chat/completions",
+        "status": 200,
+        "ok": true,
+        "elapsed_s": 2.51,
+        "billed_input": 277,
+        "usage": {
+          "prompt_tokens": 277,
+          "completion_tokens": 1,
+          "total_tokens": 410,
+          "prompt_tokens_details": {
+            "text_tokens": 277,
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "cached_tokens": 128
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 132,
+            "audio_tokens": 0,
+            "accepted_prediction_tokens": 0,
+            "rejected_prediction_tokens": 0
+          },
+          "num_sources_used": 0,
+          "cost_in_usd_ticks": 5443500
+        },
+        "error_preview": null,
+        "heuristic_on_bill_body": 92
+      },
+      "alignment": null,
+      "plan_A_usable": false,
+      "fallback_C_note": "bytes/4 heuristic remains available as soft fallback",
+      "credential_id": "f5b52cb4-90c8-4bfe-ae35-2749e1fe3e62"
+    },
+    {
+      "provider": "minimax",
+      "credential_status": "error",
+      "stored_base": "",
+      "key_sha256_12": "28500fe6b2fc",
+      "origins_tried": [
+        "https://api.minimax.chat/v1",
+        "https://api.minimaxi.com/v1",
+        "https://api.minimax.io/anthropic",
+        "https://api.minimax.io/v1"
+      ],
+      "count_attempts": [
+        {
+          "model": "MiniMax-M2",
+          "url": "https://api.minimax.chat/v1/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.391,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-M2",
+          "url": "https://api.minimax.chat/v1/anthropic/v1/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.302,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-M2",
+          "url": "https://api.minimax.chat/v1/chat/completions/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.32,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-M2",
+          "url": "https://api.minimaxi.com/v1/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.369,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-M2",
+          "url": "https://api.minimaxi.com/v1/anthropic/v1/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.355,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-M2",
+          "url": "https://api.minimaxi.com/v1/chat/completions/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.304,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-M2",
+          "url": "https://api.minimax.io/anthropic/v1/messages/count_tokens",
+          "status": 401,
+          "ok": false,
+          "elapsed_s": 1.096,
+          "input_tokens": null,
+          "error_preview": "{\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"invalid api key\"},\"request_id\":\"0758e10b4c6ae298f19bf6e03604488c\"}"
+        },
+        {
+          "model": "MiniMax-M2",
+          "url": "https://api.minimax.io/anthropic/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.962,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-M2",
+          "url": "https://api.minimax.io/anthropic/anthropic/v1/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 5.268,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-M2",
+          "url": "https://api.minimax.io/anthropic/chat/completions/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.893,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-M2",
+          "url": "https://api.minimax.io/v1/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 1.108,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-M2",
+          "url": "https://api.minimax.io/v1/anthropic/v1/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 1.113,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-M2",
+          "url": "https://api.minimax.io/v1/chat/completions/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.956,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-M2.1",
+          "url": "https://api.minimax.chat/v1/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.421,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-M2.1",
+          "url": "https://api.minimax.chat/v1/anthropic/v1/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.347,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-M2.1",
+          "url": "https://api.minimax.chat/v1/chat/completions/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.299,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-M2.1",
+          "url": "https://api.minimaxi.com/v1/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.391,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-M2.1",
+          "url": "https://api.minimaxi.com/v1/anthropic/v1/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.359,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-M2.1",
+          "url": "https://api.minimaxi.com/v1/chat/completions/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.301,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-M2.1",
+          "url": "https://api.minimax.io/anthropic/v1/messages/count_tokens",
+          "status": 401,
+          "ok": false,
+          "elapsed_s": 1.011,
+          "input_tokens": null,
+          "error_preview": "{\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"invalid api key\"},\"request_id\":\"0758e11e854dbf5aa3458538892bcf12\"}"
+        },
+        {
+          "model": "MiniMax-M2.1",
+          "url": "https://api.minimax.io/anthropic/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 1.038,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-M2.1",
+          "url": "https://api.minimax.io/anthropic/anthropic/v1/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.936,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-M2.1",
+          "url": "https://api.minimax.io/anthropic/chat/completions/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.909,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-M2.1",
+          "url": "https://api.minimax.io/v1/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 1.047,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-M2.1",
+          "url": "https://api.minimax.io/v1/anthropic/v1/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 1.204,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-M2.1",
+          "url": "https://api.minimax.io/v1/chat/completions/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 1.002,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-M3.1-Flash",
+          "url": "https://api.minimax.chat/v1/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.32,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-M3.1-Flash",
+          "url": "https://api.minimax.chat/v1/anthropic/v1/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.28,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-M3.1-Flash",
+          "url": "https://api.minimax.chat/v1/chat/completions/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.363,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-M3.1-Flash",
+          "url": "https://api.minimaxi.com/v1/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.406,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-M3.1-Flash",
+          "url": "https://api.minimaxi.com/v1/anthropic/v1/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.32,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-M3.1-Flash",
+          "url": "https://api.minimaxi.com/v1/chat/completions/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.375,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-M3.1-Flash",
+          "url": "https://api.minimax.io/anthropic/v1/messages/count_tokens",
+          "status": 401,
+          "ok": false,
+          "elapsed_s": 1.11,
+          "input_tokens": null,
+          "error_preview": "{\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"invalid api key\"},\"request_id\":\"0758e12c195545d04b31bda34c96c1cb\"}"
+        },
+        {
+          "model": "MiniMax-M3.1-Flash",
+          "url": "https://api.minimax.io/anthropic/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 1.084,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-M3.1-Flash",
+          "url": "https://api.minimax.io/anthropic/anthropic/v1/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 1.064,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-M3.1-Flash",
+          "url": "https://api.minimax.io/anthropic/chat/completions/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 1.169,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-M3.1-Flash",
+          "url": "https://api.minimax.io/v1/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 1.072,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-M3.1-Flash",
+          "url": "https://api.minimax.io/v1/anthropic/v1/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 1.051,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-M3.1-Flash",
+          "url": "https://api.minimax.io/v1/chat/completions/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.933,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-Text-01",
+          "url": "https://api.minimax.chat/v1/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.293,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-Text-01",
+          "url": "https://api.minimax.chat/v1/anthropic/v1/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.336,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-Text-01",
+          "url": "https://api.minimax.chat/v1/chat/completions/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.301,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-Text-01",
+          "url": "https://api.minimaxi.com/v1/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.341,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-Text-01",
+          "url": "https://api.minimaxi.com/v1/anthropic/v1/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.417,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-Text-01",
+          "url": "https://api.minimaxi.com/v1/chat/completions/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.249,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-Text-01",
+          "url": "https://api.minimax.io/anthropic/v1/messages/count_tokens",
+          "status": 401,
+          "ok": false,
+          "elapsed_s": 0.967,
+          "input_tokens": null,
+          "error_preview": "{\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"invalid api key\"},\"request_id\":\"0758e137550631ba977db28e77d36ac5\"}"
+        },
+        {
+          "model": "MiniMax-Text-01",
+          "url": "https://api.minimax.io/anthropic/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 1.042,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-Text-01",
+          "url": "https://api.minimax.io/anthropic/anthropic/v1/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 1.177,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-Text-01",
+          "url": "https://api.minimax.io/anthropic/chat/completions/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 1.258,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-Text-01",
+          "url": "https://api.minimax.io/v1/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 1.481,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-Text-01",
+          "url": "https://api.minimax.io/v1/anthropic/v1/messages/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 1.126,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        },
+        {
+          "model": "MiniMax-Text-01",
+          "url": "https://api.minimax.io/v1/chat/completions/count_tokens",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.971,
+          "input_tokens": null,
+          "error_preview": "404 page not found"
+        }
+      ],
+      "bill_attempts": [
+        {
+          "model": "MiniMax-M2",
+          "label": "openai_chat",
+          "url": "https://api.minimax.chat/v1/chat/completions",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.535,
+          "billed_input": null,
+          "usage": null,
+          "error_preview": "{\"type\":\"error\",\"error\":{\"type\":\"not_found_error\",\"message\":\"The model \\\"MiniMax-M2\\\" is no longer available. (2069)\",\"http_code\":\"404\"},\"request_id\":\"0758e1166afde8501955aaddcfe993b7\"}",
+          "heuristic_on_bill_body": 92
+        },
+        {
+          "model": "MiniMax-M2",
+          "label": "anthropic_messages",
+          "url": "https://api.minimax.chat/v1/messages",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.349,
+          "billed_input": null,
+          "usage": null,
+          "error_preview": "404 page not found",
+          "heuristic_on_bill_body": 83
+        },
+        {
+          "model": "MiniMax-M2",
+          "label": "openai_chat",
+          "url": "https://api.minimaxi.com/v1/chat/completions",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.266,
+          "billed_input": null,
+          "usage": null,
+          "error_preview": "{\"type\":\"error\",\"error\":{\"type\":\"not_found_error\",\"message\":\"The model \\\"MiniMax-M2\\\" is no longer available. (2069)\",\"http_code\":\"404\"},\"request_id\":\"0758e117e94d417bc2c3eb25b5aff8a7\"}",
+          "heuristic_on_bill_body": 92
+        },
+        {
+          "model": "MiniMax-M2",
+          "label": "anthropic_messages",
+          "url": "https://api.minimaxi.com/v1/messages",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.371,
+          "billed_input": null,
+          "usage": null,
+          "error_preview": "404 page not found",
+          "heuristic_on_bill_body": 83
+        },
+        {
+          "model": "MiniMax-M2",
+          "label": "openai_chat",
+          "url": "https://api.minimax.io/anthropic/chat/completions",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.94,
+          "billed_input": null,
+          "usage": null,
+          "error_preview": "404 page not found",
+          "heuristic_on_bill_body": 92
+        },
+        {
+          "model": "MiniMax-M2",
+          "label": "anthropic_messages",
+          "url": "https://api.minimax.io/anthropic/v1/messages",
+          "status": 401,
+          "ok": false,
+          "elapsed_s": 1.044,
+          "billed_input": null,
+          "usage": null,
+          "error_preview": "{\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"invalid api key\"},\"request_id\":\"0758e1191d612a9eec680dbb26d05ad9\"}",
+          "heuristic_on_bill_body": 83
+        },
+        {
+          "model": "MiniMax-M2",
+          "label": "openai_chat",
+          "url": "https://api.minimax.io/v1/chat/completions",
+          "status": 401,
+          "ok": false,
+          "elapsed_s": 0.871,
+          "billed_input": null,
+          "usage": null,
+          "error_preview": "{\"type\":\"error\",\"error\":{\"type\":\"authorized_error\",\"message\":\"invalid api key (2049)\",\"http_code\":\"401\"},\"request_id\":\"0758e11a23c400dd9721206e345ba246\"}",
+          "heuristic_on_bill_body": 92
+        },
+        {
+          "model": "MiniMax-M2",
+          "label": "anthropic_messages",
+          "url": "https://api.minimax.io/v1/messages",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.981,
+          "billed_input": null,
+          "usage": null,
+          "error_preview": "404 page not found",
+          "heuristic_on_bill_body": 83
+        },
+        {
+          "model": "MiniMax-M2.1",
+          "label": "openai_chat",
+          "url": "https://api.minimax.chat/v1/chat/completions",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.294,
+          "billed_input": null,
+          "usage": null,
+          "error_preview": "{\"type\":\"error\",\"error\":{\"type\":\"not_found_error\",\"message\":\"The model \\\"MiniMax-M2.1\\\" is no longer available. (2069)\",\"http_code\":\"404\"},\"request_id\":\"0758e124629f053d566c15ed0c14954a\"}",
+          "heuristic_on_bill_body": 92
+        },
+        {
+          "model": "MiniMax-M2.1",
+          "label": "anthropic_messages",
+          "url": "https://api.minimax.chat/v1/messages",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.369,
+          "billed_input": null,
+          "usage": null,
+          "error_preview": "404 page not found",
+          "heuristic_on_bill_body": 83
+        },
+        {
+          "model": "MiniMax-M2.1",
+          "label": "openai_chat",
+          "url": "https://api.minimaxi.com/v1/chat/completions",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.335,
+          "billed_input": null,
+          "usage": null,
+          "error_preview": "{\"type\":\"error\",\"error\":{\"type\":\"not_found_error\",\"message\":\"The model \\\"MiniMax-M2.1\\\" is no longer available. (2069)\",\"http_code\":\"404\"},\"request_id\":\"0758e125f31cb768b13d00d521362cd4\"}",
+          "heuristic_on_bill_body": 92
+        },
+        {
+          "model": "MiniMax-M2.1",
+          "label": "anthropic_messages",
+          "url": "https://api.minimaxi.com/v1/messages",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.297,
+          "billed_input": null,
+          "usage": null,
+          "error_preview": "404 page not found",
+          "heuristic_on_bill_body": 83
+        },
+        {
+          "model": "MiniMax-M2.1",
+          "label": "openai_chat",
+          "url": "https://api.minimax.io/anthropic/chat/completions",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.995,
+          "billed_input": null,
+          "usage": null,
+          "error_preview": "404 page not found",
+          "heuristic_on_bill_body": 92
+        },
+        {
+          "model": "MiniMax-M2.1",
+          "label": "anthropic_messages",
+          "url": "https://api.minimax.io/anthropic/v1/messages",
+          "status": 401,
+          "ok": false,
+          "elapsed_s": 0.923,
+          "billed_input": null,
+          "usage": null,
+          "error_preview": "{\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"invalid api key\"},\"request_id\":\"0758e12758461f27bd13d50b5f5b95fc\"}",
+          "heuristic_on_bill_body": 83
+        },
+        {
+          "model": "MiniMax-M2.1",
+          "label": "openai_chat",
+          "url": "https://api.minimax.io/v1/chat/completions",
+          "status": 401,
+          "ok": false,
+          "elapsed_s": 1.022,
+          "billed_input": null,
+          "usage": null,
+          "error_preview": "{\"type\":\"error\",\"error\":{\"type\":\"authorized_error\",\"message\":\"invalid api key (2049)\",\"http_code\":\"401\"},\"request_id\":\"0758e12828a0fbd5196082b9491df05c\"}",
+          "heuristic_on_bill_body": 92
+        },
+        {
+          "model": "MiniMax-M2.1",
+          "label": "anthropic_messages",
+          "url": "https://api.minimax.io/v1/messages",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 1.099,
+          "billed_input": null,
+          "usage": null,
+          "error_preview": "404 page not found",
+          "heuristic_on_bill_body": 83
+        },
+        {
+          "model": "MiniMax-M3.1-Flash",
+          "label": "openai_chat",
+          "url": "https://api.minimax.chat/v1/chat/completions",
+          "status": 200,
+          "ok": true,
+          "elapsed_s": 1.255,
+          "billed_input": 428,
+          "usage": {
+            "total_tokens": 431,
+            "total_characters": 0,
+            "prompt_tokens": 428,
+            "completion_tokens": 3,
+            "completion_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "prompt_tokens_details": {
+              "cached_tokens": 128
+            }
+          },
+          "error_preview": null,
+          "heuristic_on_bill_body": 94
+        },
+        {
+          "model": "MiniMax-Text-01",
+          "label": "openai_chat",
+          "url": "https://api.minimax.chat/v1/chat/completions",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.25,
+          "billed_input": null,
+          "usage": null,
+          "error_preview": "{\"type\":\"error\",\"error\":{\"type\":\"not_found_error\",\"message\":\"The model \\\"MiniMax-Text-01\\\" is no longer available. (2069)\",\"http_code\":\"404\"},\"request_id\":\"0758e13e4c5778ce363e28b2c7d891b2\"}",
+          "heuristic_on_bill_body": 93
+        },
+        {
+          "model": "MiniMax-Text-01",
+          "label": "anthropic_messages",
+          "url": "https://api.minimax.chat/v1/messages",
+          "status": 404,
+          "ok": false,
+          "elapsed_s": 0.381,
+          "billed_input": null,
+          "usage": null,
+          "error_preview": "404 page not found",
+          "heuristic_on_bill_body": 84
+        }
+      ],
+      "best_count": null,
+      "best_bill": {
+        "model": "MiniMax-M3.1-Flash",
+        "label": "openai_chat",
+        "url": "https://api.minimax.chat/v1/chat/completions",
+        "status": 200,
+        "ok": true,
+        "elapsed_s": 1.255,
+        "billed_input": 428,
+        "usage": {
+          "total_tokens": 431,
+          "total_characters": 0,
+          "prompt_tokens": 428,
+          "completion_tokens": 3,
+          "completion_tokens_details": {
+            "reasoning_tokens": 0
+          },
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        },
+        "error_preview": null,
+        "heuristic_on_bill_body": 94
+      },
+      "alignment": null,
+      "plan_A_usable": false,
+      "fallback_C_note": "bytes/4 heuristic remains available as soft fallback",
+      "credential_id": "db9949f8-bbec-4f37-8ee5-f19d6b4bff4e"
+    }
+  ],
+  "summary": {
+    "configured_enabled": [
+      "deepseek",
+      "grok",
+      "minimax"
+    ],
+    "plan_A_usable": [
+      "deepseek"
+    ],
+    "count_endpoint_found": [
+      "deepseek"
+    ],
+    "bill_ok": [
+      "deepseek",
+      "grok",
+      "minimax"
+    ],
+    "must_use_C_only_for_now": [
+      "grok",
+      "minimax"
+    ],
+    "not_in_console": [
+      "claude",
+      "codex",
+      "glm",
+      "kimi",
+      "qwen",
+      "codebuddy",
+      "gemini",
+      "qoder"
+    ]
+  }
+}

@@ -1,0 +1,50 @@
+[
+  {
+    "method": "POST",
+    "path": "/anthropic/v1/messages",
+    "content_type": "application/json",
+    "body_bytes": 116701,
+    "auth": "",
+    "headers": {
+      "host": "127.0.0.1:51068",
+      "connection": "keep-alive",
+      "user-agent": "deepseek-harness/0.2.2-rc.5 (+https://github.com/deepseek-ai/deepseek-harness) dsh-profile/headless",
+      "content-type": "application/json",
+      "accept": "text/event-stream",
+      "x-api-key": "***",
+      "anthropic-version": "2023-06-01",
+      "x-deepseek-harness-user-id": "009cd474-7aa6-477e-96f9-dc8f8e0aad23",
+      "x-deepseek-harness-session-id": "session-b320c7b8-63b6-415e-9faf-04314b87f8b2",
+      "accept-language": "*",
+      "sec-fetch-mode": "cors",
+      "accept-encoding": "gzip, deflate",
+      "content-length": "116701"
+    },
+    "body_preview": "{\"model\":\"deepseek-chat\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Reply with exactly: g0-ok\"},{\"type\":\"text\",\"text\":\"<system-reminder>\\nThe following information describes your current session:\\n\\nCurrent working directory: \\\"/private/var/folders/pm/sghfnnds2gq0sr93dqg0bj440000gn/T/g0-dsh-66gbmsgz/ws\\\".\\n\\nCurrent DSH file policy: read-only. Any available operation enforced by the DSH file sandbox cannot modify files in the standing mode. Do not refuse a required modification from this policy alone: try an available tool normally and follow any denial and escalation guidance it returns.\\n\\nApproval prompts are disabled in this session: actions that require approval are rejected automatically — do not request sandbox escalation (do not set `sandbox_permis",
+    "body_sha256_prefix": "c16741cd10bee332"
+  },
+  {
+    "method": "POST",
+    "path": "/anthropic/v1/messages",
+    "content_type": "application/json",
+    "body_bytes": 74047,
+    "auth": "",
+    "headers": {
+      "host": "127.0.0.1:51068",
+      "connection": "keep-alive",
+      "user-agent": "deepseek-harness/0.2.2-rc.5 (+https://github.com/deepseek-ai/deepseek-harness) dsh-profile/headless",
+      "content-type": "application/json",
+      "accept": "text/event-stream",
+      "x-api-key": "***",
+      "anthropic-version": "2023-06-01",
+      "x-deepseek-harness-user-id": "009cd474-7aa6-477e-96f9-dc8f8e0aad23",
+      "x-deepseek-harness-session-id": "session-b320c7b8-63b6-415e-9faf-04314b87f8b2",
+      "accept-language": "*",
+      "sec-fetch-mode": "cors",
+      "accept-encoding": "gzip, deflate",
+      "content-length": "74047"
+    },
+    "body_preview": "{\"model\":\"deepseek-chat\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Generate the session title from this JSON array of human messages:\\n[{\\\"seq\\\":11,\\\"text\\\":\\\"Reply with exactly: g0-ok\\\"}]\"}]}],\"max_tokens\":4096,\"thinking\":{\"type\":\"disabled\"},\"system\":\"Create a concise title for an AI coding-assistant session from the supplied human messages.\\nReturn only the title on one line, **in plain text of natural language**, with no quotes, prefix, explanation, Markdown, XML, or terminal control codes. No code is allowed.\\nUse the language of the messages.\\nAim for about 5 words in non-CJK languages or 10 CJK characters.\\nIf the messages give little to name, still return a short best-effort title, such as Greeting, instead of explaining.\",\"dsh_session_log\":{\"version",
+    "body_sha256_prefix": "ef57a9fbd1d9db94"
+  }
+]

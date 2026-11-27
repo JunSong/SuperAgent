@@ -3,11 +3,17 @@ package com.superagent.gateway;
 import com.superagent.core.chat.RunCredential;
 import com.superagent.core.error.ForbiddenException;
 import com.superagent.core.gateway.GatewayAttempt;
+import com.superagent.core.gateway.GatewayInputBoundMode;
 import com.superagent.core.gateway.GatewayMetering;
 import com.superagent.core.gateway.GatewayPeriods;
+import com.superagent.core.gateway.GatewayPolicy;
 import com.superagent.core.gateway.GatewayQuotaMode;
+import com.superagent.core.gateway.InputCountSource;
 import com.superagent.core.provider.ProviderCatalog;
 import com.superagent.core.tenant.TenantContext;
+import com.superagent.gateway.count.InputCountRequest;
+import com.superagent.gateway.count.InputCountResult;
+import com.superagent.gateway.count.InputTokenCounterService;
 import com.superagent.platform.provider.CredentialService;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
@@ -65,6 +71,7 @@ public class UpstreamProxy {
     private final Clock clock;
     private final QuotaReserveGate reserveGate;
     private final GatewayProxyTimeouts timeouts;
+    private final InputTokenCounterService inputCounters;
     private final ScheduledExecutorService idleWatch = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "gateway-proxy-idle");
         t.setDaemon(true);
@@ -72,12 +79,14 @@ public class UpstreamProxy {
     });
     private GatewayMetering metering; // null in tests / legacy: no ledger
     private ModelRunGrants grants; // null in some unit tests: skip live-token recheck
+    private GatewayPolicyService policyService; // null in tests → soft heuristic only
 
     @Autowired
     public UpstreamProxy(
             CredentialService credentials,
             QuotaReserveGate reserveGate,
             Clock clock,
+            InputTokenCounterService inputCounters,
             @Value("${superagent.gateway.connect-timeout-seconds:5}") long connectTimeoutSeconds,
             @Value("${superagent.gateway.first-byte-timeout-seconds:30}") long firstByteTimeoutSeconds,
             @Value("${superagent.gateway.idle-timeout-seconds:120}") long idleTimeoutSeconds,
@@ -89,7 +98,8 @@ public class UpstreamProxy {
                 clock,
                 reserveGate,
                 GatewayProxyTimeouts.ofSeconds(
-                        connectTimeoutSeconds, firstByteTimeoutSeconds, idleTimeoutSeconds, requestTimeoutSeconds));
+                        connectTimeoutSeconds, firstByteTimeoutSeconds, idleTimeoutSeconds, requestTimeoutSeconds),
+                inputCounters);
     }
 
     /** Tests inject a client pointed at a local stub. */
@@ -102,16 +112,22 @@ public class UpstreamProxy {
     }
 
     public UpstreamProxy(CredentialService credentials, HttpClient http, Clock clock, QuotaReserveGate reserveGate) {
-        this(credentials, http, clock, reserveGate, GatewayProxyTimeouts.TESTS);
+        this(credentials, http, clock, reserveGate, GatewayProxyTimeouts.TESTS, InputTokenCounterService.alwaysHeuristic());
     }
 
     UpstreamProxy(CredentialService credentials, HttpClient http, Clock clock, QuotaReserveGate reserveGate,
                   GatewayProxyTimeouts timeouts) {
+        this(credentials, http, clock, reserveGate, timeouts, InputTokenCounterService.alwaysHeuristic());
+    }
+
+    UpstreamProxy(CredentialService credentials, HttpClient http, Clock clock, QuotaReserveGate reserveGate,
+                  GatewayProxyTimeouts timeouts, InputTokenCounterService inputCounters) {
         this.credentials = credentials;
         this.http = http;
         this.clock = clock;
         this.reserveGate = reserveGate != null ? reserveGate : new QuotaReserveGate(clock);
         this.timeouts = timeouts != null ? timeouts : GatewayProxyTimeouts.TESTS;
+        this.inputCounters = inputCounters != null ? inputCounters : new InputTokenCounterService(http);
     }
 
     @PreDestroy
@@ -127,6 +143,11 @@ public class UpstreamProxy {
     @Autowired(required = false)
     void setGrants(ModelRunGrants grants) {
         this.grants = grants;
+    }
+
+    @Autowired(required = false)
+    void setPolicyService(GatewayPolicyService policyService) {
+        this.policyService = policyService;
     }
 
     /**
@@ -149,24 +170,32 @@ public class UpstreamProxy {
             java.util.function.BiConsumer<Integer, String> onResponseHeaders) throws IOException, InterruptedException {
         String normalizedSuffix = GatewayRoutePolicy.normalizeSuffix(suffix);
         GatewayRoutePolicy.assertAllowed(protocol, method, normalizedSuffix, grant.model(), body);
-        ReservationEstimator.Prepared prepared = ReservationEstimator.prepare(body, protocol, normalizedSuffix);
+        ReservationEstimator.Clamped clamped = ReservationEstimator.clamp(body, protocol, normalizedSuffix);
         try {
             return TenantContext.call(grant.companyId(), () -> {
                 GatewayAttempt attempt = null;
                 boolean sending = false;
                 try {
-                    attempt = openAttempt(grant, prepared.reservedTokens());
-                    requireGrantStillUsable(grant, attempt);
-
                     CredentialService.Choice choice = credentials.current(grant.cli());
                     RunCredential cred = choice.credential();
                     if (cred == null || cred.apiKey() == null || cred.apiKey().isBlank()) {
-                        if (attempt != null) {
-                            metering.cancel(attempt.id());
-                        }
                         throw new ForbiddenException("本公司还没有配置 " + grant.cli() + " 的 API Key");
                     }
                     String upstreamBase = resolveUpstreamBase(grant.cli(), cred.baseUrl());
+                    GatewayPolicy policy = policyService != null ? policyService.get() : GatewayPolicy.defaults();
+                    boolean hardPreferred = policy.inputBoundModeFor(grant.cli()) == GatewayInputBoundMode.PROVEN;
+                    InputCountResult counted = inputCounters.count(new InputCountRequest(
+                            grant.cli(), protocol, upstreamBase, cred.apiKey(), cred.bearer(),
+                            clamped.body(), hardPreferred));
+                    // Honest mode: PROVEN only when vendor count actually succeeded (else warn+C already).
+                    GatewayInputBoundMode boundMode = hardPreferred && counted.source() == InputCountSource.PROVIDER
+                            ? GatewayInputBoundMode.PROVEN
+                            : GatewayInputBoundMode.HEURISTIC;
+                    ReservationEstimator.Prepared prepared = ReservationEstimator.prepare(
+                            clamped.body(), protocol, normalizedSuffix, counted, boundMode);
+                    attempt = openAttempt(grant, prepared.reservedTokens());
+                    requireGrantStillUsable(grant, attempt);
+
                     String target = joinUrl(upstreamBase, normalizedSuffix);
                     // JDK HttpRequest.timeout races our pumpBody watchdog on the same deadline and can
                     // throw HttpTimeoutException("request timed out") first. Keep a short slack so the

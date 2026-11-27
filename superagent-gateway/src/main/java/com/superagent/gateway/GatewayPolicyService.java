@@ -3,6 +3,7 @@ package com.superagent.gateway;
 import com.superagent.core.gateway.GatewayPolicy;
 import com.superagent.core.gateway.GatewayReportMode;
 import com.superagent.core.gateway.GatewayReportPolicy;
+import com.superagent.core.gateway.InputCounterCatalog;
 import com.superagent.core.provider.ProviderCatalog;
 import com.superagent.core.settings.SystemSettingStore;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -99,6 +100,13 @@ public class GatewayPolicyService implements GatewayReportPolicy {
         if (!hard.isEmpty() && !GatewayPolicy.HARD_INPUT_BOUND_AVAILABLE) {
             throw new IllegalArgumentException(
                     "hardQuotaClis cannot be enabled yet: no G0-proven input bound (tokenizer/count) is available");
+        }
+        for (String h : hard) {
+            if (!InputCounterCatalog.hardEligibleClis().contains(h.toLowerCase(Locale.ROOT))) {
+                throw new IllegalArgumentException(
+                        "hardQuotaClis entry not hard-eligible in this build: " + h
+                                + " (proven: " + InputCounterCatalog.hardEligibleClis() + ")");
+            }
         }
 
         store.put(PENDING_ALERT_HOURS, String.valueOf(alert));
