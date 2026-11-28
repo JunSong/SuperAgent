@@ -600,6 +600,15 @@ def main() -> int:
         )
 
     # --- LiteLLM-style count-vs-bill (samples + production-shaped dsh body) ---
+    # Snapshot archived I1 before live overwrite — verdict must not flip on endpoint jitter.
+    archived_cvb_path = OUT / "dsh-body-count-vs-bill.json"
+    archived_dsh = None
+    if archived_cvb_path.is_file():
+        try:
+            archived_dsh = json.loads(archived_cvb_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            archived_dsh = None
+
     cvb_rows = []
     for name, body in sample_bodies():
         cvb_rows.append(count_vs_bill(api_key, name, body))
@@ -607,9 +616,13 @@ def main() -> int:
     if isinstance(dsh_shaped_for_live, dict):
         dsh_cvb = count_vs_bill(api_key, "dsh_shaped_primary", dsh_shaped_for_live)
         cvb_rows.append(dsh_cvb)
-        (OUT / "dsh-body-count-vs-bill.json").write_text(
-            json.dumps(dsh_cvb, indent=2, ensure_ascii=False)
+        # Live always lands in *-live.json; promote to archive only when count≥bill.
+        (OUT / "dsh-body-count-vs-bill-live.json").write_text(
+            json.dumps(dsh_cvb, indent=2, ensure_ascii=False) + "\n"
         )
+        if dsh_cvb.get("count_ge_bill"):
+            archived_cvb_path.write_text(json.dumps(dsh_cvb, indent=2, ensure_ascii=False) + "\n")
+            archived_dsh = dsh_cvb
         # Keep legacy bill-only artifact name for older readers, now script-produced.
         (OUT / "dsh-body-live-compare.json").write_text(
             json.dumps(
@@ -639,6 +652,7 @@ def main() -> int:
                 indent=2,
                 ensure_ascii=False,
             )
+            + "\n"
         )
 
     report["live_api"] = {
@@ -659,11 +673,11 @@ def main() -> int:
         },
     }
 
-    # Verdict: align machine-readable report with archived soak + catalogue hardEligible.
+    # Verdict: archived I1 + soak (live jitter cannot flip hardEligible proven).
     path_ok = any("/v1/messages" in (p or "") for p in report["mock"].get("paths") or [])
     live_ok = all(r.get("http_ok") for r in live_rows)
     all_ge = bool(cvb_rows) and all(r.get("count_ge_bill") for r in cvb_rows)
-    dsh_ge = bool(dsh_cvb and dsh_cvb.get("count_ge_bill"))
+    dsh_ge_archived = bool(archived_dsh and archived_dsh.get("count_ge_bill"))
     soak_summary_path = OUT / "false-reject-soak-summary.json"
     soak_passed = False
     soak_ref = None
@@ -681,20 +695,21 @@ def main() -> int:
             }
         except (OSError, json.JSONDecodeError):
             soak_passed = False
-    hard_proven = bool(dsh_ge and soak_passed)
+    hard_proven = bool(dsh_ge_archived and soak_passed)
     report["verdict"] = {
         "path_matrix_recorded": path_ok,
         "live_usage_readable": live_ok,
         "heuristic_never_under_estimates": under_estimates == 0 and live_ok,
         "count_vs_bill_all_count_ge_bill": all_ge,
-        "count_vs_bill_dsh_shaped_count_ge_bill": dsh_ge,
+        "count_vs_bill_dsh_shaped_count_ge_bill": bool(dsh_cvb and dsh_cvb.get("count_ge_bill")),
         "count_vs_bill_dsh_shaped_exact": bool(dsh_cvb and dsh_cvb.get("count_eq_bill")),
+        "count_vs_bill_dsh_shaped_archived_count_ge_bill": dsh_ge_archived,
         "false_reject_soak": soak_ref,
         "hard_input_bound_proven": hard_proven,
         "reason": (
             "I1 + soak archived: production-shaped deepseek-chat count≥bill; "
             "false-reject soak passed under the relative-5% pass line "
-            "(see false-reject-soak.md §Pass line / v3 refinement). "
+            "(decision: model-gateway-g0-deepseek-hard-pass-line-decision.md). "
             "Catalogue may set hardEligible=deepseek; company must still list it on hardQuotaClis. "
             "Hard path refuses when vendor count fails (no heuristic C)."
             if hard_proven
@@ -716,7 +731,7 @@ def main() -> int:
         ),
     }
 
-    (OUT / "report.json").write_text(json.dumps(report, indent=2, ensure_ascii=False))
+    (OUT / "report.json").write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
     # scrub key from process env leftovers
     del api_key
     summary = {

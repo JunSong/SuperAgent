@@ -385,10 +385,11 @@
       }
     },
     "hard_input_bound_proven": true,
-    "reason": "I1 + soak archived: production-shaped deepseek-chat count≥bill; false-reject soak passed under the relative-5% pass line (see false-reject-soak.md §Pass line / v3 refinement). Catalogue may set hardEligible=deepseek; company must still list it on hardQuotaClis. Hard path refuses when vendor count fails (no heuristic C).",
+    "reason": "I1 + soak archived: production-shaped deepseek-chat count≥bill; false-reject soak passed under the relative-5% pass line (decision: model-gateway-g0-deepseek-hard-pass-line-decision.md). Catalogue may set hardEligible=deepseek; company must still list it on hardQuotaClis. Hard path refuses when vendor count fails (no heuristic C).",
     "next_for_PROVEN": [
       "Ops: add deepseek to company hardQuotaClis when request-level hard R is desired.",
       "Follow-ups: Grok framing calibrate; MiniMax BPE; count audit/ledger (N2)."
-    ]
+    ],
+    "count_vs_bill_dsh_shaped_archived_count_ge_bill": true
   }
 }

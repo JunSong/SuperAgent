@@ -36,6 +36,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -183,6 +184,71 @@ class UpstreamProxyCountGateTest {
                 }))
                 .isInstanceOf(ModelRunGrants.UnauthorizedGatewayException.class);
         assertThat(countHits.get()).isZero();
+        assertThat(upstreamHits.get()).isZero();
+    }
+
+    @Test
+    void revokedAfterCountBlocksReserveAndUpstream() throws IOException {
+        // Count succeeds, then grant is revoked before reserve (post-count recheck).
+        stub.stop(0);
+        countHits.set(0);
+        upstreamHits.set(0);
+        AtomicReference<String> revokeToken = new AtomicReference<>();
+        AtomicReference<ModelRunGrants> grantsRef = new AtomicReference<>();
+        stub = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        stub.createContext("/anthropic/v1/messages/count_tokens", exchange -> {
+            countHits.incrementAndGet();
+            String token = revokeToken.get();
+            ModelRunGrants g = grantsRef.get();
+            if (token != null && g != null) {
+                TenantContext.run("co1", () -> g.revoke(token));
+            }
+            byte[] body = "{\"input_tokens\":10}".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        stub.createContext("/anthropic/v1/messages", exchange -> {
+            upstreamHits.incrementAndGet();
+            byte[] body = "ok".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        stub.start();
+        anthropicBase = "http://127.0.0.1:" + stub.getAddress().getPort() + "/anthropic";
+
+        Clock clock = Clock.fixed(Instant.parse("2026-11-15T12:00:00Z"), ZoneOffset.UTC);
+        MemoryMetering ledger = new MemoryMetering();
+        ledger.putEmployee("2026-11", "alice", 10_000);
+
+        CredentialService credentials = mock(CredentialService.class);
+        when(credentials.current(eq("deepseek")))
+                .thenReturn(new CredentialService.Choice(new RunCredential("k1", anthropicBase, "sk", true)));
+
+        ModelRunGrants grants = new ModelRunGrants(Set.of("deepseek"), "http://cp", clock);
+        grantsRef.set(grants);
+        HttpClient http = HttpClient.newHttpClient();
+        UpstreamProxy proxy = new UpstreamProxy(
+                credentials, http, clock, new QuotaReserveGate(clock),
+                GatewayProxyTimeouts.TESTS, new InputTokenCounterService(http));
+        proxy.setMetering(ledger);
+        proxy.setGrants(grants);
+
+        ModelRunLease lease = TenantContext.call("co1",
+                () -> grants.issue("t1", "r1", "alice", "deepseek", "deepseek-chat", Duration.ofMinutes(5)));
+        revokeToken.set(lease.token());
+        var grant = grants.require("Bearer " + lease.token());
+
+        byte[] body = "{\"model\":\"deepseek-chat\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":8}"
+                .getBytes(StandardCharsets.UTF_8);
+
+        assertThatThrownBy(() -> proxy.forward(grant, "anthropic",
+                "/v1/messages", "POST", Map.of(), body, new ByteArrayOutputStream(), (c, ct) -> {
+                }))
+                .isInstanceOf(ModelRunGrants.UnauthorizedGatewayException.class);
+        assertThat(countHits.get()).isEqualTo(1);
         assertThat(upstreamHits.get()).isZero();
     }
 

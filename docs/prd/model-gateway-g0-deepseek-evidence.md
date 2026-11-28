@@ -6,7 +6,7 @@
 | CLI | `dsh` **0.2.2-rc.5** |
 | Probe | `scripts/g0-deepseek-probe.py` |
 | Soak | `scripts/g0-deepseek-false-reject-soak.py` |
-| Verdict | **Hard input bound proven** (`report.json` + soak summary aligned). Pass line = relative-5% FR (v3 refinement). Enable via company `hardQuotaClis`. |
+| Verdict | **Hard input bound proven** (`report.json` + soak summary aligned). Pass line = relative-5% FR ([decision](model-gateway-g0-deepseek-hard-pass-line-decision.md)). Enable via company `hardQuotaClis`. |
 
 ## I1 · count-vs-bill (production-shaped)
 
