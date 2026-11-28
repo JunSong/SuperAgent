@@ -659,11 +659,29 @@ def main() -> int:
         },
     }
 
-    # Verdict (G0 hard-bound still needs soak archive; count-vs-bill closes I1 measurement)
+    # Verdict: align machine-readable report with archived soak + catalogue hardEligible.
     path_ok = any("/v1/messages" in (p or "") for p in report["mock"].get("paths") or [])
     live_ok = all(r.get("http_ok") for r in live_rows)
     all_ge = bool(cvb_rows) and all(r.get("count_ge_bill") for r in cvb_rows)
     dsh_ge = bool(dsh_cvb and dsh_cvb.get("count_ge_bill"))
+    soak_summary_path = OUT / "false-reject-soak-summary.json"
+    soak_passed = False
+    soak_ref = None
+    if soak_summary_path.is_file():
+        try:
+            soak_summary = json.loads(soak_summary_path.read_text())
+            soak_passed = bool(soak_summary.get("passed"))
+            soak_ref = {
+                "path": "false-reject-soak-summary.json",
+                "passed": soak_passed,
+                "n_measured": soak_summary.get("n_measured"),
+                "under_count_rate": soak_summary.get("under_count_rate"),
+                "rel_5pct_false_reject_rate": soak_summary.get("rel_5pct_false_reject_rate"),
+                "pass_line": soak_summary.get("pass_line"),
+            }
+        except (OSError, json.JSONDecodeError):
+            soak_passed = False
+    hard_proven = bool(dsh_ge and soak_passed)
     report["verdict"] = {
         "path_matrix_recorded": path_ok,
         "live_usage_readable": live_ok,
@@ -671,17 +689,31 @@ def main() -> int:
         "count_vs_bill_all_count_ge_bill": all_ge,
         "count_vs_bill_dsh_shaped_count_ge_bill": dsh_ge,
         "count_vs_bill_dsh_shaped_exact": bool(dsh_cvb and dsh_cvb.get("count_eq_bill")),
-        "hard_input_bound_proven": False,
+        "false_reject_soak": soak_ref,
+        "hard_input_bound_proven": hard_proven,
         "reason": (
-            "I1 archived: production-shaped dsh body (deepseek-chat+tools) ran count_tokens vs bill. "
-            "count ≥ bill is the soft-safe bar (exact equality not always true — tools/cache can diverge). "
-            "hardQuotaClis still blocked until a false-reject soak line is agreed and archived. "
-            "Heuristic body_bytes/4 remains observational soft fallback only."
+            "I1 + soak archived: production-shaped deepseek-chat count≥bill; "
+            "false-reject soak passed under the relative-5% pass line "
+            "(see false-reject-soak.md §Pass line / v3 refinement). "
+            "Catalogue may set hardEligible=deepseek; company must still list it on hardQuotaClis. "
+            "Hard path refuses when vendor count fails (no heuristic C)."
+            if hard_proven
+            else (
+                "I1/soak incomplete or soak summary missing/failed — do not treat hardEligible as proven. "
+                "Re-run scripts/g0-deepseek-false-reject-soak.py and keep false-reject-soak-summary.json."
+            )
         ),
-        "next_for_PROVEN": [
-            "Define false-reject ≤ agreed % on a larger sample of real company traffic shapes (two-phase: stub then offline).",
-            "Only then flip hardEligible / HARD_INPUT_BOUND_AVAILABLE and allow deepseek on hardQuotaClis.",
-        ],
+        "next_for_PROVEN": (
+            [
+                "Ops: add deepseek to company hardQuotaClis when request-level hard R is desired.",
+                "Follow-ups: Grok framing calibrate; MiniMax BPE; count audit/ledger (N2).",
+            ]
+            if hard_proven
+            else [
+                "Archive a passing false-reject soak (scripts/g0-deepseek-false-reject-soak.py).",
+                "Only then keep hardEligible / allow deepseek on hardQuotaClis.",
+            ]
+        ),
     }
 
     (OUT / "report.json").write_text(json.dumps(report, indent=2, ensure_ascii=False))

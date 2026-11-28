@@ -191,9 +191,13 @@ public class UpstreamProxy {
                     GatewayPolicy policy = policyService != null ? policyService.get() : GatewayPolicy.defaults();
                     boolean hardPreferred = policy.inputBoundModeFor(grant.cli()) == GatewayInputBoundMode.PROVEN;
                     Duration countBudget = remainingBudget(deadlineNanos);
+                    log.debug("gateway input-count start cli={} payer={} runId={} hardPreferred={}",
+                            grant.cli(), grant.payerUserId(), grant.runId(), hardPreferred);
                     InputCountResult counted = inputCounters.count(new InputCountRequest(
                             grant.cli(), protocol, upstreamBase, cred.apiKey(), cred.bearer(),
                             clamped.body(), hardPreferred, countBudget));
+                    // Recheck after count (revoke window between pre-count gate and reserve).
+                    requireGrantStillUsable(grant, null);
                     // Hard CLI: never fall back to bytes/4 (C under-shoots tools). Soft: warn+C already.
                     if (hardPreferred && counted.source() != InputCountSource.PROVIDER) {
                         throw new ForbiddenException(

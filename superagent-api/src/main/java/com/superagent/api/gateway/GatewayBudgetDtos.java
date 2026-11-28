@@ -103,11 +103,11 @@ public final class GatewayBudgetDtos {
      * Company gateway policy. Null fields on update keep the current value.
      * Defaults: alert 1h, takeover 2 business days, recon reserve target 500k, float F 100k,
      * reportMode LEGACY, managedClis empty (metering off until the admin enables CLIs),
-     * hardQuotaClis empty (no G0-proven hard input bound yet).
+     * hardQuotaClis empty until ops enables a hard-eligible CLI (currently deepseek after soak).
      *
-     * @param inputBoundMode         policy-preferred input bound label for the company
-     *                              ({@code HEURISTIC} until G0; per-request may still fall back to C
-     *                              even when a CLI is listed on {@code hardQuotaClis})
+     * @param inputBoundMode         policy-preferred input bound label ({@code HEURISTIC} when
+     *                              {@code hardQuotaClis} is empty). Hard CLI: vendor count failure
+     *                              refuses the request — never falls back to heuristic C.
      * @param hardInputBoundAvailable whether any CLI is hard-eligible in this build
      */
     public record Policy(

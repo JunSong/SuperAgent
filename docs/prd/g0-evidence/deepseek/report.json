@@ -371,11 +371,24 @@
     "count_vs_bill_all_count_ge_bill": true,
     "count_vs_bill_dsh_shaped_count_ge_bill": true,
     "count_vs_bill_dsh_shaped_exact": false,
-    "hard_input_bound_proven": false,
-    "reason": "I1 archived: production-shaped dsh body (deepseek-chat+tools) ran count_tokens vs bill. count ≥ bill is the soft-safe bar (exact equality not always true — tools/cache can diverge). hardQuotaClis still blocked until a false-reject soak line is agreed and archived. Heuristic body_bytes/4 remains observational soft fallback only.",
+    "false_reject_soak": {
+      "path": "false-reject-soak-summary.json",
+      "passed": true,
+      "n_measured": 112,
+      "under_count_rate": 0.0,
+      "rel_5pct_false_reject_rate": 0.0,
+      "pass_line": {
+        "n_ge_100": true,
+        "under_count_rate_eq_0": true,
+        "rel_fr_le_5pct": true,
+        "count_fail_eq_0": true
+      }
+    },
+    "hard_input_bound_proven": true,
+    "reason": "I1 + soak archived: production-shaped deepseek-chat count≥bill; false-reject soak passed under the relative-5% pass line (see false-reject-soak.md §Pass line / v3 refinement). Catalogue may set hardEligible=deepseek; company must still list it on hardQuotaClis. Hard path refuses when vendor count fails (no heuristic C).",
     "next_for_PROVEN": [
-      "Define false-reject ≤ agreed % on a larger sample of real company traffic shapes (two-phase: stub then offline).",
-      "Only then flip hardEligible / HARD_INPUT_BOUND_AVAILABLE and allow deepseek on hardQuotaClis."
+      "Ops: add deepseek to company hardQuotaClis when request-level hard R is desired.",
+      "Follow-ups: Grok framing calibrate; MiniMax BPE; count audit/ledger (N2)."
     ]
   }
 }

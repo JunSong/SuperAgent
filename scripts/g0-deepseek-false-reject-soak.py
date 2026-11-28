@@ -5,11 +5,11 @@ Two-phase (design review v3):
   1) Build a local corpus of production-shaped Anthropic Messages bodies (≥100)
   2) Offline: count_tokens vs minimal messages bill; never use live employee rejects as denominator
 
-Pass line (archived in report):
-  - N ≥ 100 with both C and B
+Pass line (v3 refinement — see false-reject-soak.md):
+  - N ≥ 100 with both C and B (two-phase corpus + offline replay)
   - under_count_rate (C < B) == 0
-  - rel_false_reject_rate: share of samples with C > B * 1.05  ≤ 5%
-    (exact-fit C>B rate is also reported; small systematic overshoot is expected)
+  - rel_false_reject_rate: share with C > B * 1.05  ≤ 5%
+    (exact-fit C>B is reported for transparency; ~+25 token overshoot is not material FR)
 
 Usage:
   python3 scripts/g0-deepseek-false-reject-soak.py           # build corpus if needed + soak
