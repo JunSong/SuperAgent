@@ -174,7 +174,10 @@ public class UpstreamProxy {
         try {
             return TenantContext.call(grant.companyId(), () -> {
                 GatewayAttempt attempt = null;
-                boolean sending = false;
+                // sendClaimed: beginSend succeeded (RESERVED→SENDING). outboundStarted: sendAsync invoked.
+                // Known-unsent failures after claim must abortUnsent, not markPending.
+                boolean sendClaimed = false;
+                AtomicBoolean outboundStarted = new AtomicBoolean(false);
                 try {
                     // Grant + quota before any vendor count (keys / cost must not run for revoked or
                     // zero-quota payers). Whole-request deadline covers count + upstream.
@@ -234,11 +237,14 @@ public class UpstreamProxy {
                             metering.cancel(attempt.id());
                             throw new ForbiddenException("无法取得发送权：预占已失效");
                         }
-                        sending = true;
+                        sendClaimed = true;
+                        // beginSend (DB wait) may exhaust the budget — abort before HTTP.
+                        requireBudgetRemaining(deadlineNanos);
                     }
 
                     requireGrantStillUsable(grant, attempt);
-                    HttpResponse<InputStream> resp = sendWithFirstByteTimeout(req.build(), deadlineNanos);
+                    HttpResponse<InputStream> resp = sendWithFirstByteTimeout(
+                            req.build(), deadlineNanos, () -> outboundStarted.set(true));
                     if (onResponseHeaders != null) {
                         onResponseHeaders.accept(resp.statusCode(),
                                 resp.headers().firstValue("content-type").orElse(null));
@@ -251,35 +257,17 @@ public class UpstreamProxy {
                     settleOrPending(attempt, usageProbe);
                     return resp.statusCode();
                 } catch (IOException e) {
-                    if (attempt != null) {
-                        if (sending) {
-                            metering.markPending(attempt.id());
-                        } else {
-                            metering.cancel(attempt.id());
-                        }
-                    }
+                    releaseAttemptOnFailure(attempt, sendClaimed, outboundStarted.get());
                     throw new java.io.UncheckedIOException(e);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                    if (attempt != null) {
-                        if (sending) {
-                            metering.markPending(attempt.id());
-                        } else {
-                            metering.cancel(attempt.id());
-                        }
-                    }
+                    releaseAttemptOnFailure(attempt, sendClaimed, outboundStarted.get());
                     throw new IllegalStateException("upstream interrupted", e);
                 } catch (RuntimeException e) {
-                    if (attempt != null) {
-                        try {
-                            if (sending) {
-                                metering.markPending(attempt.id());
-                            } else {
-                                metering.cancel(attempt.id());
-                            }
-                        } catch (RuntimeException ignored) {
-                            // keep freeze
-                        }
+                    try {
+                        releaseAttemptOnFailure(attempt, sendClaimed, outboundStarted.get());
+                    } catch (RuntimeException ignored) {
+                        // keep freeze if release itself fails
                     }
                     throw e;
                 }
@@ -294,7 +282,25 @@ public class UpstreamProxy {
         }
     }
 
-    private HttpResponse<InputStream> sendWithFirstByteTimeout(HttpRequest request, long deadlineNanos)
+    /**
+     * Release ledger freeze after a failed forward. Distinguishes known-unsent (cancel / abortUnsent)
+     * from uncertain outbound (markPending).
+     */
+    private void releaseAttemptOnFailure(GatewayAttempt attempt, boolean sendClaimed, boolean outboundStarted) {
+        if (attempt == null || metering == null) {
+            return;
+        }
+        if (outboundStarted) {
+            metering.markPending(attempt.id());
+        } else if (sendClaimed) {
+            metering.abortUnsent(attempt.id());
+        } else {
+            metering.cancel(attempt.id());
+        }
+    }
+
+    private HttpResponse<InputStream> sendWithFirstByteTimeout(
+            HttpRequest request, long deadlineNanos, Runnable onOutboundStarted)
             throws IOException, InterruptedException {
         // Do not coerce an expired (or sub-ms) budget into a 1ms send — that still starts outbound.
         long leftNanos = deadlineNanos - System.nanoTime();
@@ -306,6 +312,9 @@ public class UpstreamProxy {
             throw new IOException("upstream request timeout after " + timeouts.request());
         }
         long waitMs = Math.min(timeouts.firstByte().toMillis(), remainingMs);
+        if (onOutboundStarted != null) {
+            onOutboundStarted.run();
+        }
         var future = http.sendAsync(request, HttpResponse.BodyHandlers.ofInputStream());
         try {
             return future.get(waitMs, TimeUnit.MILLISECONDS);

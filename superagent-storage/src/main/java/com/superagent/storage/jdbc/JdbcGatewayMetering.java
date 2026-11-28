@@ -613,6 +613,59 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
     }
 
     @Override
+    public void abortUnsent(String attemptId) {
+        if (attemptId == null || attemptId.isBlank()) {
+            return;
+        }
+        tx.executeWithoutResult(status -> {
+            String company = TenantSchema.company();
+            // Lock so a concurrent settle/pending cannot be overwritten by a late abort.
+            GatewayAttempt current;
+            try {
+                current = lockAttempt(company, attemptId);
+            } catch (IllegalStateException missing) {
+                return;
+            }
+            if (current.status() == GatewayAttemptStatus.CANCELLED) {
+                return; // idempotent
+            }
+            if (current.status() == GatewayAttemptStatus.SETTLED
+                    || current.status() == GatewayAttemptStatus.PENDING_RECONCILIATION) {
+                // Outbound may have occurred — never refund from this path.
+                return;
+            }
+            if (current.status() != GatewayAttemptStatus.RESERVED
+                    && current.status() != GatewayAttemptStatus.SENDING) {
+                return;
+            }
+            long r = current.reservedTokens();
+            int cancelled = jdbc.update("""
+                    UPDATE gateway_attempt SET status = ?
+                    WHERE company_id = ? AND id = ? AND status IN (?, ?)
+                    """,
+                    GatewayAttemptStatus.CANCELLED.name(), company, attemptId,
+                    GatewayAttemptStatus.RESERVED.name(), GatewayAttemptStatus.SENDING.name());
+            if (cancelled != 1) {
+                return;
+            }
+            int released = jdbc.update("""
+                    UPDATE gateway_account
+                    SET available_tokens = available_tokens + ?, reserved_tokens = reserved_tokens - ?
+                    WHERE company_id = ? AND period = ? AND account_type = ? AND owner_id = ?
+                      AND reserved_tokens >= ?
+                    """,
+                    r, r, company, current.period(), GatewayAccountType.EMPLOYEE.name(),
+                    current.payerUserId(), r);
+            if (released != 1) {
+                throw new IllegalStateException("abortUnsent released 0 account rows for attempt " + attemptId);
+            }
+            writeLedger(company, "abort-unsent:" + attemptId, 1, current.period(),
+                    GatewayAccountType.EMPLOYEE, current.payerUserId(),
+                    r, -r, 0, "ABORT_UNSENT", attemptId, null);
+        });
+    }
+
+    @Override
     public GatewayAccount allocate(String operationId, String period, String toUserId, long amount, String actorUserId) {
         requireOp(operationId, period, toUserId, amount);
         return tx.execute(status -> {

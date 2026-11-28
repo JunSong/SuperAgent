@@ -74,6 +74,16 @@ public interface GatewayMetering {
 
     void cancel(String attemptId);
 
+    /**
+     * Abort a known-unsent attempt after {@link #beginSend} claimed send authority but before any
+     * HTTP dispatch. Releases the freeze from {@link GatewayAttemptStatus#RESERVED} or
+     * {@link GatewayAttemptStatus#SENDING}. Idempotent on {@link GatewayAttemptStatus#CANCELLED};
+     * no-op for {@link GatewayAttemptStatus#SETTLED} / {@link GatewayAttemptStatus#PENDING_RECONCILIATION}
+     * (must not refund after outbound may have occurred). Default no-op for test stubs.
+     */
+    default void abortUnsent(String attemptId) {
+    }
+
     /** Attempts in {@code status} for the period (newest first). Empty default for in-memory test stubs. */
     default List<GatewayAttempt> listAttempts(GatewayAttemptStatus status, String period, int limit) {
         return List.of();

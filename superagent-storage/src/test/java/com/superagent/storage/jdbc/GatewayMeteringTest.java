@@ -235,6 +235,79 @@ class GatewayMeteringTest {
     }
 
     @Test
+    void abortUnsentReleasesSendingFreezeAndIsIdempotent() {
+        JdbcGatewayMetering ledger = newLedger();
+        String period = "2026-11";
+        ledger.putEmployee(period, "bob", 50);
+        GatewayAttempt a = ledger.reserve(new GatewayMetering.ReserveRequest(
+                "req-abort", "t-abort", "r-abort", "bob", "deepseek", "m", period, 20));
+        assertThat(ledger.beginSend(a.id())).isTrue();
+        ledger.abortUnsent(a.id());
+        assertThat(ledger.findEmployee(period, "bob")).hasValueSatisfying(acc -> {
+            assertThat(acc.available()).isEqualTo(50);
+            assertThat(acc.reserved()).isZero();
+        });
+        assertThat(ledger.listAttempts(GatewayAttemptStatus.CANCELLED, period, 10))
+                .anySatisfy(x -> assertThat(x.id()).isEqualTo(a.id()));
+        assertThat(ledger.listAttempts(GatewayAttemptStatus.PENDING_RECONCILIATION, period, 10)).isEmpty();
+        // Idempotent replay must not double-credit.
+        ledger.abortUnsent(a.id());
+        assertThat(ledger.findEmployee(period, "bob")).hasValueSatisfying(acc -> {
+            assertThat(acc.available()).isEqualTo(50);
+            assertThat(acc.reserved()).isZero();
+        });
+    }
+
+    @Test
+    void abortUnsentMustNotRefundSettledOrPending() {
+        JdbcGatewayMetering ledger = newLedger();
+        String period = "2026-11";
+        ledger.putEmployee(period, "alice", 100);
+        GatewayAttempt settled = ledger.reserve(new GatewayMetering.ReserveRequest(
+                "req-s", "t-s", "r-s", "alice", "deepseek", "m", period, 30));
+        assertThat(ledger.beginSend(settled.id())).isTrue();
+        assertThat(ledger.settle(settled.id(), 20).status()).isEqualTo(GatewayAttemptStatus.SETTLED);
+        ledger.abortUnsent(settled.id());
+        assertThat(ledger.findEmployee(period, "alice")).hasValueSatisfying(a -> {
+            assertThat(a.available()).isEqualTo(80);
+            assertThat(a.reserved()).isZero();
+            assertThat(a.settled()).isEqualTo(20);
+        });
+
+        GatewayAttempt pending = ledger.reserve(new GatewayMetering.ReserveRequest(
+                "req-p2", "t-p2", "r-p2", "alice", "deepseek", "m", period, 20));
+        assertThat(ledger.beginSend(pending.id())).isTrue();
+        ledger.markPending(pending.id());
+        ledger.abortUnsent(pending.id());
+        assertThat(ledger.findEmployee(period, "alice")).hasValueSatisfying(a -> {
+            assertThat(a.reserved()).isEqualTo(20);
+            assertThat(a.settled()).isEqualTo(20);
+        });
+        assertThat(ledger.listAttempts(GatewayAttemptStatus.PENDING_RECONCILIATION, period, 10))
+                .anySatisfy(x -> assertThat(x.id()).isEqualTo(pending.id()));
+    }
+
+    @Test
+    void abortUnsentIsTenantScoped() {
+        JdbcGatewayMetering ledger = newLedger();
+        String period = "2026-11";
+        ledger.putEmployee(period, "alice", 100);
+        GatewayAttempt a = ledger.reserve(new GatewayMetering.ReserveRequest(
+                "req-ten", "t-ten", "r-ten", "alice", "deepseek", "m", period, 25));
+        assertThat(ledger.beginSend(a.id())).isTrue();
+        TenantContext.run(InCompany.OTHER, () -> ledger.abortUnsent(a.id()));
+        assertThat(ledger.findEmployee(period, "alice")).hasValueSatisfying(acc -> {
+            assertThat(acc.available()).isEqualTo(75);
+            assertThat(acc.reserved()).isEqualTo(25);
+        });
+        ledger.abortUnsent(a.id());
+        assertThat(ledger.findEmployee(period, "alice")).hasValueSatisfying(acc -> {
+            assertThat(acc.available()).isEqualTo(100);
+            assertThat(acc.reserved()).isZero();
+        });
+    }
+
+    @Test
     void otherCompanySeesNone() {
         JdbcGatewayMetering ledger = newLedger();
         ledger.putEmployee("2026-11", "alice", 100);
