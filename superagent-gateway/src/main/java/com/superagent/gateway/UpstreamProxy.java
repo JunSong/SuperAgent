@@ -198,6 +198,8 @@ public class UpstreamProxy {
                             clamped.body(), hardPreferred, countBudget));
                     // Recheck after count (revoke window between pre-count gate and reserve).
                     requireGrantStillUsable(grant, null);
+                    // Soft count may fall back after the budget is gone — stop before reserve/outbound.
+                    requireBudgetRemaining(deadlineNanos);
                     // Hard CLI: never fall back to bytes/4 (C under-shoots tools). Soft: warn+C already.
                     if (hardPreferred && counted.source() != InputCountSource.PROVIDER) {
                         throw new ForbiddenException(
@@ -210,6 +212,8 @@ public class UpstreamProxy {
                             clamped.body(), protocol, normalizedSuffix, counted, boundMode);
                     attempt = openAttempt(grant, prepared.reservedTokens());
                     requireGrantStillUsable(grant, attempt);
+                    // Reserve/wait may consume the rest of the budget — cancel unsent freeze, no outbound.
+                    requireBudgetRemaining(deadlineNanos);
 
                     String target = joinUrl(upstreamBase, normalizedSuffix);
                     // JDK HttpRequest.timeout races our pumpBody watchdog on the same deadline and can
@@ -225,6 +229,7 @@ public class UpstreamProxy {
 
                     if (attempt != null) {
                         requireGrantStillUsable(grant, attempt);
+                        requireBudgetRemaining(deadlineNanos);
                         if (!metering.beginSend(attempt.id())) {
                             metering.cancel(attempt.id());
                             throw new ForbiddenException("无法取得发送权：预占已失效");
@@ -291,7 +296,15 @@ public class UpstreamProxy {
 
     private HttpResponse<InputStream> sendWithFirstByteTimeout(HttpRequest request, long deadlineNanos)
             throws IOException, InterruptedException {
-        long remainingMs = Math.max(1L, TimeUnit.NANOSECONDS.toMillis(deadlineNanos - System.nanoTime()));
+        // Do not coerce an expired (or sub-ms) budget into a 1ms send — that still starts outbound.
+        long leftNanos = deadlineNanos - System.nanoTime();
+        if (leftNanos <= 0) {
+            throw new IOException("upstream request timeout after " + timeouts.request());
+        }
+        long remainingMs = TimeUnit.NANOSECONDS.toMillis(leftNanos);
+        if (remainingMs <= 0) {
+            throw new IOException("upstream request timeout after " + timeouts.request());
+        }
         long waitMs = Math.min(timeouts.firstByte().toMillis(), remainingMs);
         var future = http.sendAsync(request, HttpResponse.BodyHandlers.ofInputStream());
         try {
@@ -414,6 +427,9 @@ public class UpstreamProxy {
      * Light pre-check before vendor count: no account / fully exhausted LIMITED payers must not
      * trigger a company-key count call. In-flight reserved may free room — those still proceed
      * to count and then {@link #openAttempt} (which waits via {@link QuotaReserveGate}).
+     * Same-turn float continuation (B exactly spent, F unclaimed, prior live attempt) must also
+     * reach authoritative {@code reserve} — do not treat {@code available=0 && reserved=0} alone
+     * as terminal exhaustion.
      */
     private void assertQuotaMayProceed(ModelRunGrant grant) {
         if (metering == null) {
@@ -424,11 +440,25 @@ public class UpstreamProxy {
         if (account.isEmpty()) {
             throw new ForbiddenException("本月尚未分配模型额度，无法调用受管网关");
         }
-        if (account.get().quotaMode() == GatewayQuotaMode.UNLIMITED) {
+        var a = account.get();
+        if (a.quotaMode() == GatewayQuotaMode.UNLIMITED) {
             return;
         }
-        if (account.get().available() <= 0 && account.get().reserved() <= 0) {
+        if (a.available() > 0 || a.reserved() > 0) {
+            return;
+        }
+        boolean floatUnclaimed = a.floatTurnId() == null || a.floatTurnId().isBlank();
+        boolean sameTurnFloatEligible = a.floatAllowance() > 0
+                && floatUnclaimed
+                && metering.hasAttemptForTurn(period, grant.payerUserId(), grant.turnId());
+        if (!sameTurnFloatEligible) {
             throw new ForbiddenException("本月模型额度已用尽，无法调用受管网关");
+        }
+    }
+
+    private void requireBudgetRemaining(long deadlineNanos) throws IOException {
+        if (System.nanoTime() >= deadlineNanos) {
+            throw new IOException("upstream request timeout after " + timeouts.request());
         }
     }
 

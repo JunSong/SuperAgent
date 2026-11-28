@@ -112,6 +112,15 @@ public interface GatewayMetering {
     /** Recent ledger lines for the company (audit). */
     List<GatewayLedgerEntry> listLedger(String period, int limit);
 
+    /**
+     * Read-only: whether this turn already has a live attempt (SETTLED / SENDING / PENDING_RECON).
+     * Used by the proxy pre-count gate so same-turn float continuation is not blocked when
+     * {@code available=0 && reserved=0} after base is exactly spent. Default false (test stubs).
+     */
+    default boolean hasAttemptForTurn(String period, String payerUserId, String turnId) {
+        return false;
+    }
+
     record ReserveRequest(
             String requestId,
             String turnId,

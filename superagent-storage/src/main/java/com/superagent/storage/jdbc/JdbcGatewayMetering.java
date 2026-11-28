@@ -943,6 +943,11 @@ public class JdbcGatewayMetering implements GatewayMetering, GatewaySettlementUs
      * True when this turn already consumed base via a live attempt (R04). CANCELLED / RESERVED-only
      * ghosts must not unlock float for a "continuation" after freeze was released.
      */
+    @Override
+    public boolean hasAttemptForTurn(String period, String payerUserId, String turnId) {
+        return hasAttemptForTurn(TenantSchema.company(), period, payerUserId, turnId);
+    }
+
     private boolean hasAttemptForTurn(String company, String period, String payerUserId, String turnId) {
         if (turnId == null || turnId.isBlank()) {
             return false;
