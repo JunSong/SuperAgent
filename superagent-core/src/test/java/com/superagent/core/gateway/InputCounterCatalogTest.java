@@ -12,16 +12,17 @@ class InputCounterCatalogTest {
     }
 
     @Test
-    void deepseekIsHardEligibleAnthropicCount() {
+    void deepseekIsHardEligibleAfterSoak() {
         assertThat(InputCounterCatalog.require("deepseek").kind())
                 .isEqualTo(InputCounterKind.PROVIDER_ANTHROPIC_COUNT);
         assertThat(InputCounterCatalog.require("deepseek").hardEligible()).isTrue();
         assertThat(InputCounterCatalog.hardEligibleClis()).containsExactly("deepseek");
         assertThat(InputCounterCatalog.hardInputBoundAvailable()).isTrue();
+        assertThat(GatewayPolicy.HARD_INPUT_BOUND_AVAILABLE).isTrue();
     }
 
     @Test
-    void grokUsesXaiTokenizeButNotHardYet() {
+    void grokUsesXaiTokenizeSoftNotHard() {
         assertThat(InputCounterCatalog.require("grok").kind()).isEqualTo(InputCounterKind.PROVIDER_XAI_TOKENIZE);
         assertThat(InputCounterCatalog.require("grok").hardEligible()).isFalse();
     }

@@ -24,17 +24,26 @@ final class AnthropicCountTokens {
 
     static InputCountResult count(HttpClient http, String anthropicBase, String apiKey, boolean bearer, byte[] body)
             throws IOException, InterruptedException {
+        return count(http, anthropicBase, apiKey, bearer, body, TIMEOUT);
+    }
+
+    static InputCountResult count(HttpClient http, String anthropicBase, String apiKey, boolean bearer, byte[] body,
+                                  Duration timeout)
+            throws IOException, InterruptedException {
         String url = trimSlash(anthropicBase) + "/v1/messages/count_tokens";
         byte[] countBody = stripForCount(body);
+        Duration t = timeout == null || timeout.isNegative() || timeout.isZero() ? TIMEOUT : timeout;
         HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(url))
-                .timeout(TIMEOUT)
+                .timeout(t)
                 .header("Content-Type", "application/json")
                 .header("anthropic-version", "2023-06-01")
                 .POST(HttpRequest.BodyPublishers.ofByteArray(countBody));
+        // Match inference auth: bearer OR x-api-key, not both.
         if (bearer) {
             req.header("Authorization", "Bearer " + apiKey);
+        } else {
+            req.header("x-api-key", apiKey);
         }
-        req.header("x-api-key", apiKey);
         HttpResponse<String> resp = http.send(req.build(), HttpResponse.BodyHandlers.ofString());
         if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
             throw new IOException("count_tokens HTTP " + resp.statusCode() + ": " + truncate(resp.body()));

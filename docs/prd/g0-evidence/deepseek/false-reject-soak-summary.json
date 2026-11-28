@@ -1,0 +1,28 @@
+{
+  "date": "2026-11-28T10:18:13+0800",
+  "method": "Two-phase soak: local corpus of dsh-shaped / strata bodies; LiteLLM-style count_tokens then minimal messages bill. Pass: N≥100, under_count_rate=0, rel_false_reject_rate(C>B*1.05)≤0.05, count_fail=0.",
+  "count_url": "https://api.deepseek.com/anthropic/v1/messages/count_tokens",
+  "bill_url": "https://api.deepseek.com/anthropic/v1/messages",
+  "corpus_dir": "docs/prd/g0-evidence/deepseek/soak-corpus",
+  "n_attempted": 112,
+  "n_measured": 112,
+  "count_fail": 0,
+  "bill_fail": 0,
+  "under_count": 0,
+  "under_count_rate": 0.0,
+  "exact_fit_false_reject": 94,
+  "exact_fit_false_reject_rate": 0.839286,
+  "rel_5pct_false_reject": 0,
+  "rel_5pct_false_reject_rate": 0.0,
+  "pass_line": {
+    "n_ge_100": true,
+    "under_count_rate_eq_0": true,
+    "rel_fr_le_5pct": true,
+    "count_fail_eq_0": true
+  },
+  "passed": true,
+  "hard_eligible_recommendation": true,
+  "company_id": "demo",
+  "credential_id": "958bc8cf-349f-4f2b-a247-efd0f216e3fd",
+  "key_sha256_12": "a8d714d51a62"
+}

@@ -51,27 +51,37 @@ public class InputTokenCounterService {
             if (provider != null) {
                 return provider;
             }
-            if (req.hardRequired()) {
+            if (req.hardPreferred()) {
                 log.warn("input count unimplemented for hard-preferred cli={} kind={} → heuristic",
                         req.cli(), strategy.kind());
             }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("input count interrupted cli={} kind={} → heuristic", req.cli(), strategy.kind());
         } catch (Exception e) {
-            log.warn("input count provider failed cli={} kind={} hardPreferred={} → heuristic: {}",
-                    req.cli(), strategy.kind(), req.hardRequired(), e.toString());
+            String msg = e.toString();
+            if (looksLikeAuthFailure(msg)) {
+                log.warn("input count auth/credential failure cli={} kind={} hardPreferred={} → heuristic: {}",
+                        req.cli(), strategy.kind(), req.hardPreferred(), msg);
+            } else {
+                log.warn("input count provider failed cli={} kind={} hardPreferred={} → heuristic: {}",
+                        req.cli(), strategy.kind(), req.hardPreferred(), msg);
+            }
         }
         return InputCountResult.heuristic(heuristic);
     }
 
     private InputCountResult tryProvider(InputCounterKind kind, InputCountRequest req) throws Exception {
+        Duration timeout = req.timeout();
         return switch (kind) {
             case PROVIDER_ANTHROPIC_COUNT -> AnthropicCountTokens.count(
-                    http, req.upstreamBase(), req.apiKey(), req.bearer(), req.body());
+                    http, req.upstreamBase(), req.apiKey(), req.bearer(), req.body(), timeout);
             case PROVIDER_XAI_TOKENIZE -> XaiTokenizeText.count(
-                    http, req.upstreamBase(), req.apiKey(), req.body());
+                    http, req.upstreamBase(), req.apiKey(), req.body(), timeout);
             case PROVIDER_OPENAI_INPUT_TOKENS -> OpenAiInputTokens.count(
-                    http, req.upstreamBase(), req.apiKey(), req.body());
+                    http, req.upstreamBase(), req.apiKey(), req.body(), timeout);
             case PROVIDER_GOOGLE_COUNT -> GoogleCountTokens.count(
-                    http, req.upstreamBase(), req.apiKey(), req.body());
+                    http, req.upstreamBase(), req.apiKey(), req.body(), timeout);
             case LOCAL_TOKENIZER -> {
                 // MiniMax (and kin): official BPE not bundled yet — label honestly, same math as C.
                 long n = Math.max(1L, ((req.body() == null ? 0 : req.body().length) + 3L) / 4L);
@@ -79,5 +89,15 @@ public class InputTokenCounterService {
             }
             case HEURISTIC -> null;
         };
+    }
+
+    private static boolean looksLikeAuthFailure(String msg) {
+        if (msg == null) {
+            return false;
+        }
+        String m = msg.toLowerCase();
+        return m.contains("http 401") || m.contains("http 403")
+                || m.contains("unauthorized") || m.contains("forbidden")
+                || m.contains("invalid api key") || m.contains("authentication");
     }
 }

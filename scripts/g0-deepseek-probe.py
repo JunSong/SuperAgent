@@ -2,8 +2,12 @@
 """G0 DeepSeek (dsh) evidence probe.
 
 Decrypts the company deepseek key in-process (never writes plaintext), records
-CLI→upstream path via a local mock, then compares ReservationEstimator heuristic
-(input = ceil(body_bytes/4)) against live DeepSeek Anthropic Messages usage.
+CLI→upstream path via a local mock (full body kept for the primary turn), then:
+
+1. Heuristic (bytes/4) vs live Messages ``usage.input_tokens`` on small samples
+2. LiteLLM-style **count-vs-bill** on those samples **and** the captured
+   production-shaped dsh body (``deepseek-chat`` + tools + system reminders):
+   ``POST …/messages/count_tokens`` then ``POST …/messages`` (tiny max_tokens)
 
 Outputs JSON + redacted artifacts under docs/prd/g0-evidence/deepseek/.
 """
@@ -82,10 +86,14 @@ class Recorder:
     def __init__(self) -> None:
         self.lock = threading.Lock()
         self.requests: list[dict] = []
+        # Full bodies for live count-vs-bill (not written into mock-requests.json).
+        self.raw_bodies: list[tuple[str, bytes]] = []
 
-    def add(self, item: dict) -> None:
+    def add(self, item: dict, raw: bytes | None = None) -> None:
         with self.lock:
             self.requests.append(item)
+            if raw is not None:
+                self.raw_bodies.append((item.get("path") or "", raw))
 
 
 def make_handler(rec: Recorder):
@@ -109,7 +117,8 @@ def make_handler(rec: Recorder):
                     "headers": headers,
                     "body_preview": body[:800].decode("utf-8", "replace"),
                     "body_sha256_prefix": __import__("hashlib").sha256(body).hexdigest()[:16],
-                }
+                },
+                raw=body if "/v1/messages" in (self.path or "") else None,
             )
             # Minimal Anthropic Messages SSE so dsh can finish a turn.
             events = (
@@ -214,20 +223,35 @@ def run_dsh_against(base_url: str, api_key: str, prompt: str, session_id: str | 
     }
 
 
-def live_messages(api_key: str, body: dict) -> dict:
-    """Call DeepSeek Anthropic Messages. Prefer curl (system certs); fall back to urllib."""
-    data = json.dumps(body)
+ANTHROPIC_BASE = "https://api.deepseek.com/anthropic"
+COUNT_URL = ANTHROPIC_BASE + "/v1/messages/count_tokens"
+MESSAGES_URL = ANTHROPIC_BASE + "/v1/messages"
+STRIP_COUNT_FIELDS = (
+    "stream",
+    "max_tokens",
+    "max_output_tokens",
+    "max_completion_tokens",
+    "temperature",
+    "top_p",
+    "top_k",
+    "stop_sequences",
+)
+
+
+def curl_post_json(url: str, api_key: str, body: dict, timeout: int = 120) -> dict:
+    """POST JSON with Anthropic-compatible auth. Prefer curl (system certs)."""
+    data = json.dumps(body, ensure_ascii=False)
     curl = subprocess.run(
         [
             "curl",
             "-sS",
             "-m",
-            "60",
+            str(timeout),
             "-w",
             "\n__HTTP_STATUS__:%{http_code}",
             "-X",
             "POST",
-            "https://api.deepseek.com/anthropic/v1/messages",
+            url,
             "-H",
             "Content-Type: application/json",
             "-H",
@@ -257,7 +281,6 @@ def live_messages(api_key: str, body: dict) -> dict:
                 return {"ok": False, "status": status, "body": body_text[:2000]}
         return {"ok": False, "status": status, "body": body_text[:2000]}
 
-    # urllib fallback (may need unverified SSL on some corporate MITM setups)
     ctx = ssl.create_default_context()
     try:
         import certifi  # type: ignore
@@ -266,7 +289,7 @@ def live_messages(api_key: str, body: dict) -> dict:
     except Exception:
         ctx = ssl._create_unverified_context()
     req = urllib.request.Request(
-        "https://api.deepseek.com/anthropic/v1/messages",
+        url,
         data=data.encode(),
         method="POST",
         headers={
@@ -277,13 +300,118 @@ def live_messages(api_key: str, body: dict) -> dict:
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=60, context=ctx) as resp:
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
             raw = resp.read()
             return {"ok": True, "status": resp.status, "body": json.loads(raw.decode())}
     except urllib.error.HTTPError as e:
         return {"ok": False, "status": e.code, "body": e.read().decode("utf-8", "replace")[:2000]}
     except Exception as e:
         return {"ok": False, "status": 0, "body": f"curl_rc={curl.returncode} curl_err={curl.stderr!r} urllib={e!r}"}
+
+
+def live_messages(api_key: str, body: dict) -> dict:
+    return curl_post_json(MESSAGES_URL, api_key, body, timeout=120)
+
+
+def strip_for_count(body: dict) -> dict:
+    """Match Java AnthropicCountTokens.stripForCount."""
+    out = dict(body)
+    for f in STRIP_COUNT_FIELDS:
+        out.pop(f, None)
+    return out
+
+
+def prepare_bill_body(body: dict, max_tokens: int = 8) -> dict:
+    out = dict(body)
+    out["stream"] = False
+    out["max_tokens"] = max_tokens
+    # Disable thinking if present to keep bill cheap / stable.
+    if isinstance(out.get("thinking"), dict):
+        out["thinking"] = {"type": "disabled"}
+    return out
+
+
+def count_vs_bill(api_key: str, name: str, body: dict) -> dict:
+    """LiteLLM-style: same shaped body → count_tokens then minimal messages bill."""
+    raw = json.dumps(body, ensure_ascii=False).encode()
+    count_body = strip_for_count(body)
+    bill_body = prepare_bill_body(body)
+    t0 = time.time()
+    counted = curl_post_json(COUNT_URL, api_key, count_body, timeout=120)
+    t_count = round(time.time() - t0, 3)
+    count_tokens = None
+    if counted.get("ok") and isinstance(counted.get("body"), dict):
+        n = counted["body"].get("input_tokens")
+        if isinstance(n, int):
+            count_tokens = n
+    t1 = time.time()
+    billed = live_messages(api_key, bill_body)
+    t_bill = round(time.time() - t1, 3)
+    usage = {}
+    if billed.get("ok") and isinstance(billed.get("body"), dict):
+        usage = billed["body"].get("usage") or {}
+    bill_tokens = None
+    parts = []
+    for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"):
+        if isinstance(usage.get(k), int):
+            parts.append(usage[k])
+    if parts:
+        bill_tokens = sum(parts)
+    heur = heuristic_input(raw)
+    delta = None
+    if isinstance(count_tokens, int) and isinstance(bill_tokens, int):
+        delta = count_tokens - bill_tokens
+    return {
+        "name": name,
+        "model": body.get("model"),
+        "body_bytes": len(raw),
+        "body_sha256_12": __import__("hashlib").sha256(raw).hexdigest()[:12],
+        "has_tools": bool(body.get("tools")),
+        "message_count": len(body.get("messages") or []) if isinstance(body.get("messages"), list) else None,
+        "heuristic_input": heur,
+        "count_url": COUNT_URL,
+        "count_ok": bool(counted.get("ok")),
+        "count_http_status": counted.get("status"),
+        "count_input_tokens": count_tokens,
+        "count_elapsed_s": t_count,
+        "count_error_preview": None if counted.get("ok") else str(counted.get("body"))[:500],
+        "bill_url": MESSAGES_URL,
+        "bill_ok": bool(billed.get("ok")),
+        "bill_http_status": billed.get("status"),
+        "bill_input_tokens": bill_tokens,
+        "bill_output_tokens": usage.get("output_tokens"),
+        "bill_elapsed_s": t_bill,
+        "bill_error_preview": None if billed.get("ok") else str(billed.get("body"))[:500],
+        "usage_raw": usage,
+        "count_minus_bill": delta,
+        "count_ge_bill": (delta is not None and delta >= 0),
+        "count_eq_bill": (delta == 0),
+        "heuristic_under_bill": bool(isinstance(bill_tokens, int) and heur < bill_tokens),
+        "aligned": bool(delta == 0),
+    }
+
+
+def pick_primary_dsh_body(raw_bodies: list[tuple[str, bytes]]) -> tuple[dict, bytes] | None:
+    """Prefer the largest /v1/messages JSON that looks like a real agent turn (tools)."""
+    candidates: list[tuple[int, dict, bytes]] = []
+    for path, raw in raw_bodies:
+        if "/v1/messages" not in path:
+            continue
+        try:
+            body = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if not isinstance(body, dict):
+            continue
+        score = len(raw)
+        if body.get("tools"):
+            score += 1_000_000
+        candidates.append((score, body, raw))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    _, body, raw = candidates[0]
+    return body, raw
 
 
 def sample_bodies() -> list[tuple[str, dict]]:
@@ -370,11 +498,31 @@ def main() -> int:
         # Give late requests a moment
         time.sleep(0.5)
         httpd.shutdown()
+        primary = pick_primary_dsh_body(rec.raw_bodies)
+        dsh_body_meta = None
+        if primary is not None:
+            dsh_body, dsh_raw = primary
+            (OUT / "dsh-shaped-body.json").write_text(
+                json.dumps(dsh_body, ensure_ascii=False, indent=2)
+            )
+            dsh_body_meta = {
+                "path": "dsh-shaped-body.json",
+                "body_bytes": len(dsh_raw),
+                "body_sha256_12": __import__("hashlib").sha256(dsh_raw).hexdigest()[:12],
+                "model": dsh_body.get("model"),
+                "has_tools": bool(dsh_body.get("tools")),
+                "message_count": len(dsh_body.get("messages") or [])
+                if isinstance(dsh_body.get("messages"), list)
+                else None,
+                "captured_from": "mock dsh → local Anthropic stub (same process)",
+            }
         report["mock"] = {
             "base_url": mock_base,
-            "dsh": {k: v for k, v in mock_run.items() if k != "stdout_sample"} | {"stdout_sample": mock_run["stdout_sample"][:15]},
+            "dsh": {k: v for k, v in mock_run.items() if k != "stdout_sample"}
+            | {"stdout_sample": mock_run["stdout_sample"][:15]},
             "recorded_requests": rec.requests,
             "paths": sorted({r.get("path") for r in rec.requests}),
+            "dsh_shaped_body": dsh_body_meta,
         }
         (OUT / "mock-requests.json").write_text(json.dumps(rec.requests, indent=2, ensure_ascii=False))
         (OUT / "mock-dsh-stdout.txt").write_text("\n".join(mock_run.get("stdout_sample") or []))
@@ -412,7 +560,13 @@ def main() -> int:
                 "stderr_tail": mock_run.get("stderr_tail"),
             }
 
-    # --- Live Anthropic Messages usage vs heuristic ---
+    # Keep primary body for live count-vs-bill after the tempdir closes (already on disk).
+    dsh_shaped_for_live = None
+    shaped_path = OUT / "dsh-shaped-body.json"
+    if shaped_path.is_file():
+        dsh_shaped_for_live = json.loads(shaped_path.read_text())
+
+    # --- Live Anthropic Messages usage vs heuristic (small samples) ---
     live_rows = []
     under_estimates = 0
     for name, body in sample_bodies():
@@ -432,7 +586,11 @@ def main() -> int:
                 "heuristic_input": est_in,
                 "vendor_input_tokens": prompt_tokens,
                 "vendor_output_tokens": usage.get("output_tokens"),
-                "ratio_heur_over_vendor": (round(est_in / prompt_tokens, 3) if isinstance(prompt_tokens, int) and prompt_tokens else None),
+                "ratio_heur_over_vendor": (
+                    round(est_in / prompt_tokens, 3)
+                    if isinstance(prompt_tokens, int) and prompt_tokens
+                    else None
+                ),
                 "under_estimate": bool(isinstance(prompt_tokens, int) and est_in < prompt_tokens),
                 "http_ok": result.get("ok"),
                 "http_status": result.get("status"),
@@ -440,37 +598,101 @@ def main() -> int:
                 "usage_raw": usage,
             }
         )
+
+    # --- LiteLLM-style count-vs-bill (samples + production-shaped dsh body) ---
+    cvb_rows = []
+    for name, body in sample_bodies():
+        cvb_rows.append(count_vs_bill(api_key, name, body))
+    dsh_cvb = None
+    if isinstance(dsh_shaped_for_live, dict):
+        dsh_cvb = count_vs_bill(api_key, "dsh_shaped_primary", dsh_shaped_for_live)
+        cvb_rows.append(dsh_cvb)
+        (OUT / "dsh-body-count-vs-bill.json").write_text(
+            json.dumps(dsh_cvb, indent=2, ensure_ascii=False)
+        )
+        # Keep legacy bill-only artifact name for older readers, now script-produced.
+        (OUT / "dsh-body-live-compare.json").write_text(
+            json.dumps(
+                {
+                    "http_status": dsh_cvb.get("bill_http_status"),
+                    "ok": dsh_cvb.get("bill_ok"),
+                    "usage": dsh_cvb.get("usage_raw"),
+                    "vendor_input": dsh_cvb.get("bill_input_tokens"),
+                    "body_bytes": dsh_cvb.get("body_bytes"),
+                    "heuristic_input": dsh_cvb.get("heuristic_input"),
+                    "under_estimate": dsh_cvb.get("heuristic_under_bill"),
+                    "ratio": (
+                        round(dsh_cvb["heuristic_input"] / dsh_cvb["bill_input_tokens"], 3)
+                        if isinstance(dsh_cvb.get("bill_input_tokens"), int)
+                        and dsh_cvb.get("bill_input_tokens")
+                        else None
+                    ),
+                    "body_sha256_12": dsh_cvb.get("body_sha256_12"),
+                    "model": dsh_cvb.get("model"),
+                    "has_tools": dsh_cvb.get("has_tools"),
+                    "message_count": dsh_cvb.get("message_count"),
+                    "count_input_tokens": dsh_cvb.get("count_input_tokens"),
+                    "count_minus_bill": dsh_cvb.get("count_minus_bill"),
+                    "count_eq_bill": dsh_cvb.get("count_eq_bill"),
+                    "produced_by": "scripts/g0-deepseek-probe.py count_vs_bill",
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+
     report["live_api"] = {
-        "endpoint": "https://api.deepseek.com/anthropic/v1/messages",
+        "endpoint": MESSAGES_URL,
         "samples": live_rows,
         "under_estimate_count": under_estimates,
         "sample_count": len(live_rows),
+        "count_vs_bill": {
+            "method": "LiteLLM-style: strip generation fields → count_tokens; same body + max_tokens=8 → messages",
+            "count_url": COUNT_URL,
+            "bill_url": MESSAGES_URL,
+            "rows": cvb_rows,
+            "dsh_shaped": dsh_cvb,
+            "all_rows_count_ge_bill": all(r.get("count_ge_bill") for r in cvb_rows),
+            "all_rows_count_eq_bill": all(r.get("count_eq_bill") for r in cvb_rows),
+            "dsh_shaped_count_ge_bill": bool(dsh_cvb and dsh_cvb.get("count_ge_bill")),
+            "dsh_shaped_count_eq_bill": bool(dsh_cvb and dsh_cvb.get("count_eq_bill")),
+        },
     }
 
-    # Verdict (G0 hard-bound NOT proven by heuristic)
+    # Verdict (G0 hard-bound still needs soak archive; count-vs-bill closes I1 measurement)
     path_ok = any("/v1/messages" in (p or "") for p in report["mock"].get("paths") or [])
     live_ok = all(r.get("http_ok") for r in live_rows)
+    all_ge = bool(cvb_rows) and all(r.get("count_ge_bill") for r in cvb_rows)
+    dsh_ge = bool(dsh_cvb and dsh_cvb.get("count_ge_bill"))
     report["verdict"] = {
         "path_matrix_recorded": path_ok,
         "live_usage_readable": live_ok,
         "heuristic_never_under_estimates": under_estimates == 0 and live_ok,
+        "count_vs_bill_all_count_ge_bill": all_ge,
+        "count_vs_bill_dsh_shaped_count_ge_bill": dsh_ge,
+        "count_vs_bill_dsh_shaped_exact": bool(dsh_cvb and dsh_cvb.get("count_eq_bill")),
         "hard_input_bound_proven": False,
         "reason": (
-            "Heuristic body_bytes/4 is observational only. Hard R requires a G0-proven tokenizer/count "
-            "API with false-reject baseline; this probe documents DeepSeek Anthropic path + usage fields "
-            "and shows whether the soft heuristic under-shoots vendor input_tokens on the sample set."
+            "I1 archived: production-shaped dsh body (deepseek-chat+tools) ran count_tokens vs bill. "
+            "count ≥ bill is the soft-safe bar (exact equality not always true — tools/cache can diverge). "
+            "hardQuotaClis still blocked until a false-reject soak line is agreed and archived. "
+            "Heuristic body_bytes/4 remains observational soft fallback only."
         ),
         "next_for_PROVEN": [
-            "Adopt vendor count or aligned tokenizer for deepseek-chat/reasoner request bodies (tools+system+messages).",
-            "Define false-reject ≤5% on a larger sample drawn from real company traffic shapes (two-phase: stub then offline).",
-            "Only then flip HARD_INPUT_BOUND_AVAILABLE and allow deepseek on hardQuotaClis.",
+            "Define false-reject ≤ agreed % on a larger sample of real company traffic shapes (two-phase: stub then offline).",
+            "Only then flip hardEligible / HARD_INPUT_BOUND_AVAILABLE and allow deepseek on hardQuotaClis.",
         ],
     }
 
     (OUT / "report.json").write_text(json.dumps(report, indent=2, ensure_ascii=False))
     # scrub key from process env leftovers
     del api_key
-    print(json.dumps({"out": str(OUT / "report.json"), "verdict": report["verdict"]}, indent=2))
+    summary = {
+        "out": str(OUT / "report.json"),
+        "dsh_shaped_count_vs_bill": dsh_cvb,
+        "verdict": report["verdict"],
+    }
+    print(json.dumps(summary, indent=2, ensure_ascii=False))
     return 0
 
 

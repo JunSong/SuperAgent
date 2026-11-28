@@ -27,6 +27,11 @@ final class XaiTokenizeText {
 
     static InputCountResult count(HttpClient http, String openaiRoot, String apiKey, byte[] body)
             throws IOException, InterruptedException {
+        return count(http, openaiRoot, apiKey, body, TIMEOUT);
+    }
+
+    static InputCountResult count(HttpClient http, String openaiRoot, String apiKey, byte[] body, Duration timeout)
+            throws IOException, InterruptedException {
         JsonNode root = JSON.readTree(body);
         String model = text(root, "model");
         String rendered = renderGrokish(root);
@@ -36,8 +41,9 @@ final class XaiTokenizeText {
         if (model != null) {
             payload.put("model", model);
         }
+        Duration t = timeout == null || timeout.isNegative() || timeout.isZero() ? TIMEOUT : timeout;
         HttpRequest req = HttpRequest.newBuilder(URI.create(url))
-                .timeout(TIMEOUT)
+                .timeout(t)
                 .header("Content-Type", "application/json")
                 .header("Authorization", "Bearer " + apiKey)
                 .POST(HttpRequest.BodyPublishers.ofByteArray(JSON.writeValueAsBytes(payload)))
@@ -50,11 +56,10 @@ final class XaiTokenizeText {
         if (tokens < 1) {
             throw new IOException("tokenize-text missing token count: " + truncate(resp.body()));
         }
-        // LiteLLM adds measured token_count_framing; until we calibrate per model, pad conservatively
-        // so soft A over-reserves rather than under (still not hardEligible).
+        // Framing pad is a local guess — never label PROVIDER until calibrated against bill.
         long framing = framingPad(model);
-        return InputCountResult.provider(tokens + framing,
-                url + " +framing=" + framing + " (not hard-calibrated)");
+        return InputCountResult.localEstimate(tokens + framing,
+                url + " +framing=" + framing + " (uncalibrated; not PROVIDER)");
     }
 
     /** Conservative pads inspired by LiteLLM cost-map framing for Grok hosts. */
@@ -103,16 +108,22 @@ final class XaiTokenizeText {
         return sb.toString();
     }
 
-    private static long readTokenCount(JsonNode root) {
+    /**
+     * xAI live shape (2026-11-28): {@code {"token_ids":[{token_id,string_token,token_bytes},…]}} —
+     * length of the array is the token count. Also accept scalar / {@code tokens} variants.
+     */
+    static long readTokenCount(JsonNode root) {
         for (String k : new String[]{"token_count", "tokenCount", "count", "input_tokens"}) {
             JsonNode n = root.get(k);
             if (n != null && n.isNumber()) {
                 return n.asLong();
             }
         }
-        JsonNode tokens = root.get("tokens");
-        if (tokens != null && tokens.isArray()) {
-            return tokens.size();
+        for (String k : new String[]{"token_ids", "tokens"}) {
+            JsonNode arr = root.get(k);
+            if (arr != null && arr.isArray()) {
+                return arr.size();
+            }
         }
         return 0;
     }

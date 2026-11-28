@@ -39,5 +39,5 @@ Code path is live — see `model-gateway-input-counter-strategy.md`. This matrix
 ## Next
 
 1. When more keys are added in admin, re-run `python3 scripts/g0-count-tokens-matrix.py`.
-2. Grok framing calibration / MiniMax real BPE before expanding `hardEligible`.
-3. DeepSeek false-reject soak before product hard-spend wording.
+2. Grok: verify `/tokenize-text` before leaving HEURISTIC; MiniMax real BPE before expanding `hardEligible`.
+3. DeepSeek: production-shaped (`deepseek-chat` + tools) count-vs-bill + false-reject soak; only then flip `hardEligible`.

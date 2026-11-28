@@ -23,14 +23,16 @@ public final class InputCounterCatalog {
     }
 
     private static final Map<String, Strategy> BY_CLI = Map.ofEntries(
+            // hardEligible: false-reject soak 2026-11-28 (N=112, under=0, rel_FR≤5%=0).
             entry("deepseek", InputCounterKind.PROVIDER_ANTHROPIC_COUNT, true,
-                    "Wired: Anthropic count_tokens; warn+C on failure; hardEligible"),
+                    "Wired: Anthropic count_tokens; hardEligible after soak; count fail refuses"),
             entry("claude", InputCounterKind.PROVIDER_ANTHROPIC_COUNT, false,
                     "Wired: Anthropic count_tokens; warn+C; hard after alignment"),
             entry("glm", InputCounterKind.PROVIDER_ANTHROPIC_COUNT, false,
                     "Wired: Zhipu Anthropic count_tokens; warn+C"),
+            // I3 2026-11-28: /v1/tokenize-text usable (token_ids[]); framing pad → LOCAL_ESTIMATE, not hard.
             entry("grok", InputCounterKind.PROVIDER_XAI_TOKENIZE, false,
-                    "Wired: /tokenize-text + template + framing pad; warn+C"),
+                    "Wired: /tokenize-text (token_ids); +framing → LOCAL_ESTIMATE; hard after calibrate"),
             entry("codex", InputCounterKind.PROVIDER_OPENAI_INPUT_TOKENS, false,
                     "Wired: /responses/input_tokens; warn+C"),
             entry("kimi", InputCounterKind.HEURISTIC, false,
@@ -42,7 +44,7 @@ public final class InputCounterCatalog {
             entry("codebuddy", InputCounterKind.HEURISTIC, false,
                     "Heuristic"),
             entry("gemini", InputCounterKind.PROVIDER_GOOGLE_COUNT, false,
-                    "Wired: models/{m}:countTokens; warn+C"),
+                    "Wired: models/{m}:countTokens on configured https base; warn+C"),
             entry("qoder", InputCounterKind.HEURISTIC, false,
                     "Heuristic"));
 

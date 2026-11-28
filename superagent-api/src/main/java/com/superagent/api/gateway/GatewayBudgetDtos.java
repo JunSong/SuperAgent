@@ -105,8 +105,10 @@ public final class GatewayBudgetDtos {
      * reportMode LEGACY, managedClis empty (metering off until the admin enables CLIs),
      * hardQuotaClis empty (no G0-proven hard input bound yet).
      *
-     * @param inputBoundMode         effective request-level input bound mode ({@code HEURISTIC} until G0)
-     * @param hardInputBoundAvailable whether a proven tokenizer/count path exists in this build
+     * @param inputBoundMode         policy-preferred input bound label for the company
+     *                              ({@code HEURISTIC} until G0; per-request may still fall back to C
+     *                              even when a CLI is listed on {@code hardQuotaClis})
+     * @param hardInputBoundAvailable whether any CLI is hard-eligible in this build
      */
     public record Policy(
             int pendingAlertAfterHours,

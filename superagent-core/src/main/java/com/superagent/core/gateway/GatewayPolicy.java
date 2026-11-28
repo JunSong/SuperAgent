@@ -35,7 +35,7 @@ public record GatewayPolicy(
 
     /**
      * True when {@link InputCounterCatalog} lists at least one {@code hardEligible} CLI
-     * (currently DeepSeek Anthropic {@code count_tokens}).
+     * (DeepSeek after archived false-reject soak).
      */
     public static final boolean HARD_INPUT_BOUND_AVAILABLE = InputCounterCatalog.hardInputBoundAvailable();
 

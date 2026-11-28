@@ -176,6 +176,12 @@ public class UpstreamProxy {
                 GatewayAttempt attempt = null;
                 boolean sending = false;
                 try {
+                    // Grant + quota before any vendor count (keys / cost must not run for revoked or
+                    // zero-quota payers). Whole-request deadline covers count + upstream.
+                    requireGrantStillUsable(grant, null);
+                    assertQuotaMayProceed(grant);
+                    long deadlineNanos = System.nanoTime() + timeouts.request().toNanos();
+
                     CredentialService.Choice choice = credentials.current(grant.cli());
                     RunCredential cred = choice.credential();
                     if (cred == null || cred.apiKey() == null || cred.apiKey().isBlank()) {
@@ -184,11 +190,16 @@ public class UpstreamProxy {
                     String upstreamBase = resolveUpstreamBase(grant.cli(), cred.baseUrl());
                     GatewayPolicy policy = policyService != null ? policyService.get() : GatewayPolicy.defaults();
                     boolean hardPreferred = policy.inputBoundModeFor(grant.cli()) == GatewayInputBoundMode.PROVEN;
+                    Duration countBudget = remainingBudget(deadlineNanos);
                     InputCountResult counted = inputCounters.count(new InputCountRequest(
                             grant.cli(), protocol, upstreamBase, cred.apiKey(), cred.bearer(),
-                            clamped.body(), hardPreferred));
-                    // Honest mode: PROVEN only when vendor count actually succeeded (else warn+C already).
-                    GatewayInputBoundMode boundMode = hardPreferred && counted.source() == InputCountSource.PROVIDER
+                            clamped.body(), hardPreferred, countBudget));
+                    // Hard CLI: never fall back to bytes/4 (C under-shoots tools). Soft: warn+C already.
+                    if (hardPreferred && counted.source() != InputCountSource.PROVIDER) {
+                        throw new ForbiddenException(
+                                "硬限额 CLI 的厂商 input count 未成功，拒绝出站（不会回落启发式）");
+                    }
+                    GatewayInputBoundMode boundMode = hardPreferred
                             ? GatewayInputBoundMode.PROVEN
                             : GatewayInputBoundMode.HEURISTIC;
                     ReservationEstimator.Prepared prepared = ReservationEstimator.prepare(
@@ -218,7 +229,6 @@ public class UpstreamProxy {
                     }
 
                     requireGrantStillUsable(grant, attempt);
-                    long deadlineNanos = System.nanoTime() + timeouts.request().toNanos();
                     HttpResponse<InputStream> resp = sendWithFirstByteTimeout(req.build(), deadlineNanos);
                     if (onResponseHeaders != null) {
                         onResponseHeaders.accept(resp.statusCode(),
@@ -394,6 +404,36 @@ public class UpstreamProxy {
             }
             throw new ModelRunGrants.UnauthorizedGatewayException("invalid or revoked run token");
         }
+    }
+
+    /**
+     * Light pre-check before vendor count: no account / fully exhausted LIMITED payers must not
+     * trigger a company-key count call. In-flight reserved may free room — those still proceed
+     * to count and then {@link #openAttempt} (which waits via {@link QuotaReserveGate}).
+     */
+    private void assertQuotaMayProceed(ModelRunGrant grant) {
+        if (metering == null) {
+            return;
+        }
+        String period = GatewayPeriods.current(clock);
+        var account = metering.findEmployee(period, grant.payerUserId());
+        if (account.isEmpty()) {
+            throw new ForbiddenException("本月尚未分配模型额度，无法调用受管网关");
+        }
+        if (account.get().quotaMode() == GatewayQuotaMode.UNLIMITED) {
+            return;
+        }
+        if (account.get().available() <= 0 && account.get().reserved() <= 0) {
+            throw new ForbiddenException("本月模型额度已用尽，无法调用受管网关");
+        }
+    }
+
+    private static Duration remainingBudget(long deadlineNanos) {
+        long leftNanos = deadlineNanos - System.nanoTime();
+        if (leftNanos <= 0) {
+            return Duration.ofMillis(1);
+        }
+        return Duration.ofNanos(leftNanos);
     }
 
     private GatewayAttempt openAttempt(ModelRunGrant grant, long reservedTokens) {

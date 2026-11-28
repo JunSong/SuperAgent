@@ -58,3 +58,6 @@ docker/.env
 
 # scripts/package.sh: the last commit shipped to the deploy host
 scripts/.package-last-commit
+
+# Regenerable G0 soak bodies (rebuild: python3 scripts/g0-deepseek-false-reject-soak.py --corpus-only)
+docs/prd/g0-evidence/deepseek/soak-corpus/
